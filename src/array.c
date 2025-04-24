@@ -10,6 +10,7 @@ struct array* resize_array(struct array* a) {
   if (new == NULL) {
       fprintf(stderr, "ERROR: malloc failed for struct array");
       exit(1);
+
   }
   new->size = a->size*2;
   new->index = a->index;
