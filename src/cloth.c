@@ -26,6 +26,7 @@
 
 
 /* write the final values of nodes, channels, edges and payments in csv files */
+/*出力ファイルにノード、チャネル、エッジ、支払いの最終値をcsvファイルに出力*/
 void write_output(struct network* network, struct array* payments, char output_dir_name[]) {
   FILE* csv_channel_output, *csv_group_output, *csv_edge_output, *csv_payment_output, *csv_node_output;
   long i,j, *id;
@@ -46,7 +47,7 @@ void write_output(struct network* network, struct array* payments, char output_d
   }
 
   strcpy(output_filename, output_dir_name);
-  strcat(output_filename, "channels_output.csv");
+  strcat(output_filename, "channels_output.csv"); //チャネルの情報（ID、ノード間の接続、容量など）
   csv_channel_output = fopen(output_filename, "w");
   if(csv_channel_output  == NULL) {
     printf("ERROR cannot open channel_output.csv\n");
@@ -63,7 +64,7 @@ void write_output(struct network* network, struct array* payments, char output_d
   strcat(output_filename, "groups_output.csv");
   csv_group_output = fopen(output_filename, "w");
   if(csv_group_output  == NULL) {
-    printf("ERROR cannot open groups_output.csv\n");
+    printf("ERROR cannot open groups_output.csv\n"); //グループの情報（構成エッジ、容量、閉鎖状態など）
     exit(-1);
   }
   fprintf(csv_group_output, "id,edges,balances,is_closed(closed_time),constructed_time,min_cap_limit,max_cap_limit,max_edge_balance,min_edge_balance,group_capacity,cul\n");
@@ -104,7 +105,7 @@ void write_output(struct network* network, struct array* payments, char output_d
   fclose(csv_group_output);
 
   strcpy(output_filename, output_dir_name);
-  strcat(output_filename, "edges_output.csv");
+  strcat(output_filename, "edges_output.csv"); //エッジの情報（ID、接続ノード、バランス、手数料など）
   csv_edge_output = fopen(output_filename, "w");
   if(csv_edge_output  == NULL) {
     printf("ERROR cannot open edge_output.csv\n");
@@ -150,7 +151,7 @@ void write_output(struct network* network, struct array* payments, char output_d
   fclose(csv_edge_output);
 
   strcpy(output_filename, output_dir_name);
-  strcat(output_filename, "payments_output.csv");
+  strcat(output_filename, "payments_output.csv"); //支払いの詳細（送信者、受信者、金額、ルート、成功/失敗など）
   csv_payment_output = fopen(output_filename, "w");
   if(csv_payment_output  == NULL) {
     printf("ERROR cannot open payment_output.csv\n");
@@ -206,7 +207,7 @@ void write_output(struct network* network, struct array* payments, char output_d
   strcat(output_filename, "nodes_output.csv");
   csv_node_output = fopen(output_filename, "w");
   if(csv_node_output  == NULL) {
-    printf("ERROR cannot open nodes_output.csv\n");
+    printf("ERROR cannot open nodes_output.csv\n"); //ノードの情報（ID、接続エッジなど）
     return;
   }
   fprintf(csv_node_output, "id,open_edges\n");
@@ -229,7 +230,7 @@ void write_output(struct network* network, struct array* payments, char output_d
   fclose(csv_node_output);
 }
 
-
+/*ネットワークと支払いの初期パラメータを初期化*/
 void initialize_input_parameters(struct network_params *net_params, struct payments_params *pay_params) {
   net_params->n_nodes = net_params->n_channels = net_params->capacity_per_channel = 0;
   net_params->faulty_node_prob = 0.0;
@@ -246,6 +247,7 @@ void initialize_input_parameters(struct network_params *net_params, struct payme
 
 
 /* parse the input parameters in "cloth_input.txt" */
+/*入力ファイル（cloth_input.txt）を読み取り、シミュレーションの設定を読み込む*/
 void read_input(struct network_params* net_params, struct payments_params* pay_params){
   FILE* input_file;
   char *parameter, *value, line[1024];
@@ -418,6 +420,7 @@ unsigned int has_shards(struct payment* payment){
 
 
 /* process stats of payments that were split (mpp payments) */
+/*支払い（特に分割支払い）の統計を後処理*/
 void post_process_payment_stats(struct array* payments){
   long i;
   struct payment* payment, *shard1, *shard2;
@@ -446,7 +449,7 @@ void post_process_payment_stats(struct array* payments){
   }
 }
 
-
+/*ランダムジェネレータを初期化*/
 gsl_rng* initialize_random_generator(){
   gsl_rng_env_setup();
   return gsl_rng_alloc (gsl_rng_default);
@@ -473,13 +476,13 @@ int main(int argc, char *argv[]) {
   }
   strcpy(output_dir_name, argv[1]);
 
-  read_input(&net_params, &pay_params);
+  read_input(&net_params, &pay_params); //入力パラメータの読み込み
 
   simulation = malloc(sizeof(struct simulation));
 
   simulation->random_generator = initialize_random_generator();
   printf("NETWORK INITIALIZATION\n");
-  network = initialize_network(net_params, simulation->random_generator);
+  network = initialize_network(net_params, simulation->random_generator); //ネットワークの初期化
   n_nodes = array_len(network->nodes);
   n_edges = array_len(network->edges);
 
@@ -494,7 +497,7 @@ int main(int argc, char *argv[]) {
     printf("group_cover_rate on init : %f\n", (float)(array_len(network->edges) - list_len(group_add_queue)) / (float)(array_len(network->edges)));
 
   printf("PAYMENTS INITIALIZATION\n");
-  payments = initialize_payments(pay_params,  n_nodes, simulation->random_generator);
+  payments = initialize_payments(pay_params,  n_nodes, simulation->random_generator); //支払いイベントの生成
 
   printf("EVENTS INITIALIZATION\n");
   simulation->events = initialize_events(payments);
@@ -514,7 +517,7 @@ int main(int argc, char *argv[]) {
   simulation->current_time = 1;
   long completed_payments = 0;
   while(heap_len(simulation->events) != 0) {
-    event = heap_pop(simulation->events, compare_event);
+    event = heap_pop(simulation->events, compare_event); //イベントの処理（heap_popでイベントを取得し、対応する処理を実行）
 
     simulation->current_time = event->time;
     switch(event->type){
@@ -584,7 +587,7 @@ int main(int argc, char *argv[]) {
   time_spent = (double) (end - begin)/CLOCKS_PER_SEC;
   printf("Time consumed by simulation events: %lf s\n", time_spent);
 
-  write_output(network, payments, output_dir_name);
+  write_output(network, payments, output_dir_name); //シミュレーション結果の出力
 
     list_free(group_add_queue);
     free(simulation->random_generator);
