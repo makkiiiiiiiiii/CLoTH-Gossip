@@ -428,17 +428,51 @@ def analyze_output(output_dir_name):
     return result
 
 
+# def load_cloth_input(output_dir_name):
+#     cloth_input = {}
+#     filepath = os.path.join(output_dir_name, "cloth_input.txt")
+#
+#     if not os.path.exists(filepath):
+#         raise FileNotFoundError(f"{filepath}is not a file")
+#
+#     with open(filepath, 'r') as cloth_input_file:
+#         for line in cloth_input_file:
+#             line = line.strip()
+#             if line and not line.startswith('#'):
+#                 if '=' in line:
+#                     continue
+#                 key, value = line.split('=', 1)
+#                 cloth_input[key.strip()] = value.strip()
+#
+#     required_keys = ["average_payment_amount", "payment_rate"]
+#     for key in required_keys:
+#         if key not in cloth_input:
+#             raise KeyError(f"'{key}' is missing in cloth_input.txt at {output_dir_name}")
+#
+#     cloth_input["request_amt_rate"] = int(cloth_input["average_payment_amount"]) * int(cloth_input["payment_rate"])
+#     return cloth_input
 def load_cloth_input(output_dir_name):
     cloth_input = {}
-    with open(output_dir_name + "cloth_input.txt", 'r') as cloth_input_file:
+    filepath = os.path.join(output_dir_name, "cloth_input.txt")
+
+    if not os.path.exists(filepath):
+        raise FileNotFoundError(f"{filepath} is not a file")
+
+    with open(filepath, 'r', encoding='utf-8') as cloth_input_file:
         for line in cloth_input_file:
             line = line.strip()
             if line and not line.startswith('#'):
-                key, value = line.split('=')
-                cloth_input[key.strip()] = value.strip()
-    cloth_input["request_amt_rate"] = int(cloth_input["average_payment_amount"]) * int(cloth_input["payment_rate"])  # 単位時間に発生する送金リクエスト額[satoshi/sec]
-    return cloth_input
+                if '=' in line:
+                    key, value = line.split('=', 1)
+                    cloth_input[key.strip()] = value.strip()
 
+    required_keys = ["average_payment_amount", "payment_rate"]
+    for key in required_keys:
+        if key not in cloth_input:
+            raise KeyError(f"'{key}' is missing in cloth_input.txt at {output_dir_name}")
+
+    cloth_input["request_amt_rate"] = int(cloth_input["average_payment_amount"]) * int(cloth_input["payment_rate"])
+    return cloth_input
 
 def process_output_dir(output_dir):
     relative_path = output_dir.replace(output_root_dir_name, "")

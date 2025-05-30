@@ -10,7 +10,7 @@ seed="$1"
 output_dir="$2/$(date "+%Y%m%d%H%M%S")"
 mkdir "$output_dir"
 
-max_processes=32
+max_processes=4
 
 queue=()
 running_processes=0
