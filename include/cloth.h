@@ -27,6 +27,9 @@ struct network_params{
   unsigned int group_broadcast_delay;
   int group_size;
   float group_limit_rate;
+  unsigned int use_conventional_method;
+  float group_min_cap_ratio;
+  float group_max_cap_ratio;
 };
 
 struct payments_params{

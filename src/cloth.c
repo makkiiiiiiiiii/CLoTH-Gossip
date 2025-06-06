@@ -365,6 +365,23 @@ void read_input(struct network_params* net_params, struct payments_params* pay_p
         if(strcmp(value, "")==0) net_params->group_limit_rate = -1;
         else net_params->group_limit_rate = strtof(value, NULL);
     }
+    else if (strcmp(parameter,"use_conventional_method")==0) {
+        if(strcmp(value, "true")==0)
+            net_params->use_conventional_method = 1;
+        else if(strcmp(value, "false")==0)
+            net_params->use_conventional_method = 0;
+        else{
+            fprintf(stderr, "ERROR: wrong value of <use_conventional_method>. Use true or false.\n");
+            fclose(input_file);
+            exit(-1);
+        }
+    }
+    else if(strcmp(parameter, "group_min_cap_ratio")==0){
+        net_params->group_min_cap_ratio = strtof(value, NULL);
+    }
+    else if(strcmp(parameter, "group_max_cap_ratio")==0){
+        net_params->group_max_cap_ratio = strtof(value, NULL);
+    }
     else if(strcmp(parameter, "payments_filename")==0){
       strcpy(pay_params->payments_filename, value);
     }
