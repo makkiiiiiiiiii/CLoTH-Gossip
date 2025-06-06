@@ -7,39 +7,10 @@ import numpy as np
 from matplotlib import pyplot as plt
 
 csv.field_size_limit(200_000_000)
-if len(sys.argv) < 1:
-    print("python3 analyze_output.py <output_dir>")
-    exit(1)
-output_root_dir_name = sys.argv[1]
 
-SUMMARY_CSV_HEADER = [
-    "simulation_id",
-    "generate_network_from_file",
-    "nodes_filename",
-    "channels_filename",
-    "edges_filename",
-    "n_additional_nodes",
-    "n_channels_per_node",
-    "capacity_per_channel",
-    "faulty_node_probability",
-    "generate_payments_from_file",
-    "payment_timeout",
-    "average_payment_forward_interval",
-    "variance_payment_forward_interval",
-    "routing_method",
-    "group_size",
-    "group_limit_rate",
-    "group_cap_update",
-    "group_broadcast_delay",
-    "payments_filename",
-    "payment_rate",
-    "n_payments",
-    "average_payment_amount",
-    "variance_payment_amount",
-    "average_max_fee_limit",
-    "variance_max_fee_limit",
-    "mpp",
-    "seed",
+BASE_HEADER = ["simulation_id"]
+
+RESULT_HEADER = [
     "request_amt_rate",
     "simulation_time",
     "success_rate",
@@ -149,7 +120,6 @@ SUMMARY_CSV_HEADER = [
     "cul/75-percentile",
     "cul/95-percentile",
 ]
-
 
 def find_output_dirs(root_dir):
     files = []
@@ -433,13 +403,13 @@ def load_cloth_input(output_dir_name):
     filepath = os.path.join(output_dir_name, "cloth_input.txt")
 
     if not os.path.exists(filepath):
-        raise FileNotFoundError(f"{filepath}is not a file")
+        raise FileNotFoundError(f"{filepath} is not a file")
 
     with open(filepath, 'r') as cloth_input_file:
         for line in cloth_input_file:
             line = line.strip()
             if line and not line.startswith('#'):
-                if '=' in line:
+                if '=' not in line:
                     continue
                 key, value = line.split('=', 1)
                 cloth_input[key.strip()] = value.strip()
@@ -466,10 +436,17 @@ def process_output_dir(output_dir):
     print(output_dir)
     return row_data
 
-
 if __name__ == "__main__":
     output_root_dir_name = sys.argv[1]
     output_dirs = find_output_dirs(output_root_dir_name)
+
+    if not output_dirs:
+        print("No output directories with cloth_input.txt found.")
+        sys.exit(1)
+
+    example_input = load_cloth_input(output_dirs[0])
+    CLOTH_INPUT_HEADER = list(example_input.keys())
+    SUMMARY_CSV_HEADER = BASE_HEADER + CLOTH_INPUT_HEADER + RESULT_HEADER
 
     num_processes = os.cpu_count()
 

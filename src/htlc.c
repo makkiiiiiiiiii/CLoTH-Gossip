@@ -778,14 +778,14 @@ struct element* construct_groups(struct simulation* simulation, struct element* 
         struct group* group = malloc(sizeof(struct group));
         group->edges = array_initialize(net_params.group_size);
         group->edges = array_insert(group->edges, requesting_edge);
-        if(net_params.group_limit_rate != -1) {
+        if(net_params.use_conventional_method) {
             group->max_cap_limit = requesting_edge->balance + (uint64_t)((float)requesting_edge->balance * net_params.group_limit_rate);
             group->min_cap_limit = requesting_edge->balance - (uint64_t)((float)requesting_edge->balance * net_params.group_limit_rate);
             if(group->max_cap_limit < requesting_edge->balance) group->max_cap_limit = UINT64_MAX;
             if(group->min_cap_limit > requesting_edge->balance) group->min_cap_limit = 0;
         }else {
-            group->max_cap_limit = UINT64_MAX;
-            group->min_cap_limit = 0;
+            group->max_cap_limit = (uint64_t)((float)requesting_edge->balance * net_params.group_max_cap_ratio);
+            group->min_cap_limit = (uint64_t)((float)requesting_edge->balance * net_params.group_min_cap_ratio);
         }
         group->id = array_len(network->groups);
         group->is_closed = 0;
