@@ -19,11 +19,28 @@
 #include "../include/cloth.h"
 #include "../include/network.h"
 #include "../include/event.h"
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <errno.h>
+
+FILE* csv_group_events = NULL;
 
 /* This file contains the main, where the simulation logic is executed;
    additionally, it contains the the initialization functions,
    a function that reads the input and a function that writes the output values in csv files */
 
+static void mkdir_p(const char* path) {
+  char tmp[512];
+  snprintf(tmp, sizeof(tmp), "%s", path);
+  for (char* p = tmp + 1; *p; p++) {
+    if (*p == '/') { *p = '\0'; if (mkdir(tmp, 0755) != 0 && errno != EEXIST) break; *p = '/'; }
+  }
+  mkdir(tmp, 0755);
+}
+static void ensure_parent_dir(const char* filepath){
+  char dir[512]; snprintf(dir, sizeof(dir), "%s", filepath);
+  char* slash = strrchr(dir, '/'); if (slash) { *slash = '\0'; mkdir_p(dir); }
+}
 
 /* write the final values of nodes, channels, edges and payments in csv files */
 /*出力ファイルにノード、チャネル、エッジ、支払いの最終値をcsvファイルに出力*/
@@ -243,6 +260,21 @@ void initialize_input_parameters(struct network_params *net_params, struct payme
   pay_params->payments_from_file = 0;
   strcpy(pay_params->payments_filename, "\0");
   pay_params->mpp = 0;
+  net_params->tau_default               = 0.10;
+  net_params->k_used_on_min_edge        = 5;
+  net_params->cooldown_hops             = 5;
+  net_params->max_leaves_per_group_tick = 1;
+
+  /* logging defaults */
+  net_params->enable_group_event_csv = 0;
+  strncpy(net_params->group_event_csv_filename, "group_events.csv",
+          sizeof(net_params->group_event_csv_filename));
+  net_params->group_event_csv_filename[sizeof(net_params->group_event_csv_filename)-1] = '\0';
+
+  /* tau randomization defaults (optional) */
+  net_params->tau_randomize = 0;
+  net_params->tau_min = 0.08;
+  net_params->tau_max = 0.15;
 }
 
 
@@ -406,6 +438,46 @@ void read_input(struct network_params* net_params, struct payments_params* pay_p
     else if(strcmp(parameter, "variance_max_fee_limit")==0){
         pay_params->max_fee_limit_sigma = strtod(value, NULL);
     }
+    else if(strcmp(parameter, "tau_default")==0){
+      net_params->tau_default = strtod(value, NULL);
+    }
+    else if(strcmp(parameter, "k_used_on_min_edge")==0){
+      net_params->k_used_on_min_edge = (int)strtol(value, NULL, 10);
+    }
+    else if(strcmp(parameter, "cooldown_hops")==0){
+      net_params->cooldown_hops = (int)strtol(value, NULL, 10);
+    }
+    else if(strcmp(parameter, "max_leaves_per_group_tick")==0){
+      net_params->max_leaves_per_group_tick = (int)strtol(value, NULL, 10);
+    }
+    else if(strcmp(parameter, "enable_group_event_csv")==0){
+      if(strcmp(value, "true")==0)      net_params->enable_group_event_csv = 1;
+      else if(strcmp(value, "false")==0)net_params->enable_group_event_csv = 0;
+      else{
+        fprintf(stderr, "ERROR: wrong value of <enable_group_event_csv>. Use true or false.\n");
+        fclose(input_file);
+        exit(-1);
+      }
+    }
+    else if(strcmp(parameter, "group_event_csv_filename")==0){
+      strncpy(net_params->group_event_csv_filename, value, sizeof(net_params->group_event_csv_filename));
+      net_params->group_event_csv_filename[sizeof(net_params->group_event_csv_filename)-1] = '\0';
+    }
+    else if(strcmp(parameter, "tau_randomize")==0){
+      if(strcmp(value, "true")==0)      net_params->tau_randomize = 1;
+      else if(strcmp(value, "false")==0)net_params->tau_randomize = 0;
+      else{
+        fprintf(stderr, "ERROR: wrong value of <tau_randomize>. Use true or false.\n");
+        fclose(input_file);
+        exit(-1);
+      }
+    }
+    else if(strcmp(parameter, "tau_min")==0){
+      net_params->tau_min = strtod(value, NULL);
+    }
+    else if(strcmp(parameter, "tau_max")==0){
+      net_params->tau_max = strtod(value, NULL);
+    }
     else{
       fprintf(stderr, "ERROR: unknown parameter <%s>\n", parameter);
       fclose(input_file);
@@ -427,6 +499,29 @@ void read_input(struct network_params* net_params, struct payments_params* pay_p
           exit(-1);
       }
   }
+  if(net_params->tau_default < 0.0 || net_params->tau_default > 1.0){
+    fprintf(stderr, "ERROR: tau_default must be in [0,1].\n");
+    exit(-1);
+  }
+  if(net_params->tau_randomize){
+    if(!(net_params->tau_min >= 0.0 && net_params->tau_max <= 1.0 && net_params->tau_max >= net_params->tau_min)){
+      fprintf(stderr, "ERROR: tau_min/tau_max must satisfy 0<=tau_min<=tau_max<=1.\n");
+      exit(-1);
+    }
+  }
+  if(net_params->k_used_on_min_edge < 0){
+    fprintf(stderr, "ERROR: k_used_on_min_edge must be >= 0.\n");
+    exit(-1);
+  }
+  if(net_params->cooldown_hops < 0){
+    fprintf(stderr, "ERROR: cooldown_hops must be >= 0.\n");
+    exit(-1);
+  }
+  if(net_params->max_leaves_per_group_tick <= 0){
+    fprintf(stderr, "ERROR: max_leaves_per_group_tick must be >= 1.\n");
+    exit(-1);
+  }
+
   fclose(input_file);
 }
 
@@ -502,6 +597,20 @@ int main(int argc, char *argv[]) {
   network = initialize_network(net_params, simulation->random_generator); //ネットワークの初期化
   n_nodes = array_len(network->nodes);
   n_edges = array_len(network->edges);
+  if (net_params.enable_group_event_csv) {
+    const char* cfg = net_params.group_event_csv_filename; // "result/group_events.csv"
+    char ge_path[512];
+    // 相対パス→そのままCWD基準（cmake-build-debugで実行してるなら result/～）
+    strncpy(ge_path, cfg, sizeof(ge_path)); ge_path[sizeof(ge_path)-1] = '\0';
+    ensure_parent_dir(ge_path);
+    csv_group_events = fopen(ge_path, "w");
+    if (!csv_group_events) {
+      fprintf(stderr, "WARN: cannot open group events file <%s>\n", ge_path);
+    } else {
+      fprintf(csv_group_events, "type,time,group_id,edge_id,reason,detail\n"); // ヘッダ
+      fflush(csv_group_events);
+    }
+  }
 
     // add edge which is not a member of any group to group_add_queue
     struct element* group_add_queue = NULL;
@@ -605,6 +714,7 @@ int main(int argc, char *argv[]) {
   printf("Time consumed by simulation events: %lf s\n", time_spent);
 
   write_output(network, payments, output_dir_name); //シミュレーション結果の出力
+  if (csv_group_events) { fclose(csv_group_events); csv_group_events = NULL; }
 
     list_free(group_add_queue);
     free(simulation->random_generator);

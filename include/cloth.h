@@ -30,6 +30,21 @@ struct network_params{
   unsigned int use_conventional_method;
   float group_min_cap_ratio;
   float group_max_cap_ratio;
+  /* === leave/rejoin control === */
+  double   tau_default;              /* UL >= tau で離脱候補 */
+  int      k_used_on_min_edge;       /* 最小エッジの加入後使用回数しきい値K */
+  int      cooldown_hops;            /* クールダウン長 (平均フォワード間隔×この値) */
+  int      max_leaves_per_group_tick;/* 1グループ同tickでの離脱上限 */
+
+  /* === logging === */
+  int      enable_group_event_csv;   /* bool: CSVログ有効/無効 */
+  char     group_event_csv_filename[256];
+  int  enable_group_trace_verbose;
+
+  /* === optional: per-edge tau randomization === */
+  int      tau_randomize;            /* bool */
+  double   tau_min;
+  double   tau_max;
 };
 
 struct payments_params{

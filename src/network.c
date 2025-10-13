@@ -36,7 +36,7 @@ struct channel* new_channel(long id, long direction1, long direction2, long node
 }
 
 
-//struct edge* new_edge(long id, long channel_id, long counter_edge_id, long from_node_id, long to_node_id, uint64_t balance, struct policy policy, uint64_t channel_capacity){
+/* one directional edge of a channel */
 struct edge* new_edge(long id, long channel_id, long counter_edge_id, long from_node_id, long to_node_id, uint64_t balance, struct policy policy, uint64_t channel_capacity){
   struct edge* edge;
   edge = malloc(sizeof(struct edge));
@@ -50,12 +50,20 @@ struct edge* new_edge(long id, long channel_id, long counter_edge_id, long from_
   edge->is_closed = 0;
   edge->tot_flows = 0;
   edge->group = NULL;
+
   struct channel_update* channel_update = malloc(sizeof(struct channel_update));
   channel_update->htlc_maximum_msat = channel_capacity;
   channel_update->edge_id = edge->id;
   channel_update->time = 0;
   edge->channel_updates = push(NULL, channel_update);
   edge->edge_locked_balance_and_durations = NULL;
+
+  /* === added: initialize leave/rejoin related fields === */
+  edge->join_time       = 0;     /* will be set when the edge actually joins a group */
+  edge->flows_at_join   = 0;     /* snapshot of tot_flows taken at join_time */
+  edge->tolerance_tau   = 0.10;  /* default tolerance; may be randomized at network init */
+  edge->last_leave_time = 0;     /* updated when leaving a group */
+
   return edge;
 }
 
@@ -422,6 +430,22 @@ int update_group(struct group* group, struct network_params net_params, uint64_t
 
 long get_edge_balance(struct edge* e){
     return e->balance;
+}
+
+/* === added: safely remove an edge from a group's member list === */
+/* Rebuilds the array without 'e' to avoid in-place mutation issues during iteration. */
+void remove_edge_from_group(struct group* g, struct edge* e){
+    if(g == NULL || g->edges == NULL) return;
+    long n = array_len(g->edges);
+    struct array* rebuilt = array_initialize(n > 0 ? n : 1);
+    for(long i = 0; i < n; i++){
+      struct edge* cur = array_get(g->edges, i);
+      /* === CHANGE: ポインタ比較 → ID比較 === */
+      if(cur && e && cur->id == e->id) continue;
+      rebuilt = array_insert(rebuilt, cur);
+    }
+    array_free(g->edges);
+    g->edges = rebuilt;
 }
 
 struct edge_snapshot* take_edge_snapshot(struct edge* e, uint64_t sent_amt, short is_in_group, uint64_t group_cap) {

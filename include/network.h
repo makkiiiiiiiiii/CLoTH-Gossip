@@ -59,6 +59,12 @@ struct edge {
   struct group* group;
   struct element* channel_updates;
   struct element* edge_locked_balance_and_durations;
+
+  /* === leave/rejoin 用メタ === */
+  double   tolerance_tau;     /* UL の許容しきい値 */
+  uint64_t join_time;         /* このグループに (再)参加した時刻 */
+  uint64_t flows_at_join;     /* 参加時の tot_flows スナップショット */
+  uint64_t last_leave_time;   /* 直近でグループを離脱した時刻 */
 };
 
 
@@ -136,6 +142,9 @@ struct network* initialize_network(struct network_params net_params, gsl_rng* ra
 int update_group(struct group* group, struct network_params net_params, uint64_t current_time);
 
 long get_edge_balance(struct edge* e);
+
+/* helper to remove an edge from a group's edge array (implemented in network.c) */
+void remove_edge_from_group(struct group* g, struct edge* e);
 
 void free_network(struct network* network);
 

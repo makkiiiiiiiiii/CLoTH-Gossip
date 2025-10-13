@@ -10,6 +10,9 @@
 #include <gsl/gsl_math.h>
 
 #include "../include/htlc.h"
+
+#include <inttypes.h>
+
 #include "../include/array.h"
 #include "../include/heap.h"
 #include "../include/payments.h"
@@ -713,59 +716,202 @@ void receive_fail(struct event* event, struct simulation* simulation, struct net
     simulation->events = heap_insert(simulation->events, channel_update_event, compare_event);
 }
 
+/* ====== UPDATED: request_group_update with leave/rejoin mechanism ====== */
 struct element* request_group_update(struct event* event, struct simulation* simulation, struct network* network, struct network_params net_params, struct element* group_add_queue){
+
+    int scheduled_construct = 0; /* whether to schedule CONSTRUCTGROUPS at the end */
+
+    /* parameters for leave decision (MVP defaults) */
+    const uint64_t cooldown_ms = (uint64_t)net_params.cooldown_hops
+                           * (uint64_t)net_params.average_payment_forward_interval;
+    const uint32_t K_used = (uint32_t)net_params.k_used_on_min_edge;
+    const uint32_t max_leaves_per_group_tick = (uint32_t)net_params.max_leaves_per_group_tick;
+
 
     for(long i = 0; i < array_len(event->payment->route->route_hops); i++){
         struct route_hop* hop = array_get(event->payment->route->route_hops, i);
         struct edge* edge = array_get(network->edges, hop->edge_id);
         struct edge* counter_edge = array_get(network->edges, edge->counter_edge_id);
 
+        /* --- handle group for edge --- */
         if(edge->group != NULL) {
             struct group* group = edge->group;
-            int close_flg = update_group(edge->group, net_params, simulation->current_time);
+            int close_flg = update_group(group, net_params, simulation->current_time);
 
             if(close_flg){
+                if (net_params.enable_group_event_csv && csv_group_events) {
+                    fprintf(csv_group_events,
+                        "close,%llu,%ld,-,update_violation,members:",
+                        (unsigned long long)simulation->current_time, (long)group->id);
+                    for (long j = 0; j < array_len(group->edges); j++){
+                        struct edge* ee = array_get(group->edges, j);
+                        fprintf(csv_group_events, "%ld%s", ee->id, (j+1<array_len(group->edges))?"-":"");
+                    }
+                    fprintf(csv_group_events, "\n");
+                }
+
                 group->is_closed = simulation->current_time;
 
-                // add edges to queue
+                /* add all edges to queue and clear membership */
                 for(long j = 0; j < array_len(group->edges); j++){
                     struct edge* edge_in_group = array_get(group->edges, j);
                     edge_in_group->group = NULL;
+                    edge_in_group->last_leave_time = simulation->current_time; /* mark leave time on close */
                     group_add_queue = list_insert_sorted_position(group_add_queue, edge_in_group, (long (*)(void *)) get_edge_balance);
                 }
 
-                // construct_groups event
+                /* schedule reconstruction immediately */
                 uint64_t next_event_time = simulation->current_time;
                 struct event* next_event = new_event(next_event_time, CONSTRUCTGROUPS, event->node_id, event->payment);
                 simulation->events = heap_insert(simulation->events, next_event, compare_event);
+                scheduled_construct = 1;
+            } else {
+                /* leave decision (UL/K with cooldown, cap per tick) */
+                long m = array_len(group->edges);
+                struct array* leave_candidates = array_initialize(m > 0 ? m : 1);
+                uint32_t leaves_this_tick = 0;
+
+                for(long j = 0; j < m; j++){
+                    struct edge* e = array_get(group->edges, j);
+                    if(e == NULL) continue;
+
+                    /* cooldown */
+                    if(simulation->current_time >= e->last_leave_time &&
+                       (simulation->current_time - e->last_leave_time) < cooldown_ms){
+                        continue;
+                    }
+
+                    /* UL = max(0, 1 - group_cap / balance) */
+                    double UL = 0.0;
+                    if(e->balance > 0){
+                        UL = 1.0 - ((double)group->group_cap / (double)e->balance);
+                        if(UL < 0.0) UL = 0.0;
+                        if(UL > 1.0) UL = 1.0;
+                    }
+                    int is_min_edge = (e->balance == group->group_cap);
+                    uint64_t used_since_join = (e->tot_flows >= e->flows_at_join) ? (e->tot_flows - e->flows_at_join) : 0;
+
+                    int divergence = (UL >= e->tolerance_tau);
+                    int overuse    = (is_min_edge && (used_since_join >= K_used));
+
+                    if(divergence || overuse){
+                        leave_candidates = array_insert(leave_candidates, e);
+                    }
+                }
+
+                long c = array_len(leave_candidates);
+                for(long k = 0; k < c && leaves_this_tick < (long)max_leaves_per_group_tick; k++){
+                    struct edge* e = array_get(leave_candidates, k);
+                    if (net_params.enable_group_event_csv && csv_group_events) {
+                        double UL = 0.0;
+                        if (e->balance > 0) {
+                            UL = 1.0 - ((double)group->group_cap / (double)e->balance);
+                            if (UL < 0.0) UL = 0.0;
+                            if (UL > 1.0) UL = 1.0;
+                        }
+                        uint64_t used_since_join = (e->tot_flows >= e->flows_at_join)
+                                                   ? (e->tot_flows - e->flows_at_join) : 0;
+                        const char* reason = (UL >= e->tolerance_tau) ? "UL" : "K";
+                        fprintf(csv_group_events,
+                            "leave,%llu,%ld,%ld,%s,UL=%.5f,tau=%.5f,used=%" PRIu64 "\n",
+                            (unsigned long long)simulation->current_time,
+                            (long)group->id, (long)e->id, reason,
+                            UL, e->tolerance_tau, used_since_join);
+                    }
+                    /* remove from group and enqueue */
+                    remove_edge_from_group(group, e);
+                    e->group = NULL;
+                    e->last_leave_time = simulation->current_time;
+
+                    group_add_queue = list_insert_sorted_position(group_add_queue, e, (long (*)(void *)) get_edge_balance);
+
+                    leaves_this_tick++;
+                    scheduled_construct = 1;
+                }
+
+                array_free(leave_candidates);
             }
         }
 
+        /* --- handle group for counter_edge (symmetric) --- */
         if(counter_edge->group != NULL) {
             struct group* group = counter_edge->group;
-            int close_flg = update_group(counter_edge->group, net_params, simulation->current_time);
+            int close_flg = update_group(group, net_params, simulation->current_time);
 
             if(close_flg){
                 group->is_closed = simulation->current_time;
 
-                // add edges to queue
                 for(long j = 0; j < array_len(group->edges); j++){
                     struct edge* edge_in_group = array_get(group->edges, j);
                     edge_in_group->group = NULL;
+                    edge_in_group->last_leave_time = simulation->current_time;
                     group_add_queue = list_insert_sorted_position(group_add_queue, edge_in_group, (long (*)(void *)) get_edge_balance);
                 }
 
-                // construct_groups event
                 uint64_t next_event_time = simulation->current_time;
                 struct event* next_event = new_event(next_event_time, CONSTRUCTGROUPS, event->node_id, event->payment);
                 simulation->events = heap_insert(simulation->events, next_event, compare_event);
+                scheduled_construct = 1;
+            } else {
+                long m = array_len(group->edges);
+                struct array* leave_candidates = array_initialize(m > 0 ? m : 1);
+                uint32_t leaves_this_tick = 0;
+
+                for(long j = 0; j < m; j++){
+                    struct edge* e = array_get(group->edges, j);
+                    if(e == NULL) continue;
+
+                    if(simulation->current_time >= e->last_leave_time &&
+                       (simulation->current_time - e->last_leave_time) < cooldown_ms){
+                        continue;
+                    }
+
+                    double UL = 0.0;
+                    if(e->balance > 0){
+                        UL = 1.0 - ((double)group->group_cap / (double)e->balance);
+                        if(UL < 0.0) UL = 0.0;
+                        if(UL > 1.0) UL = 1.0;
+                    }
+                    int is_min_edge = (e->balance == group->min_cap);
+                    uint64_t used_since_join = (e->tot_flows >= e->flows_at_join) ? (e->tot_flows - e->flows_at_join) : 0;
+
+                    int divergence = (UL >= e->tolerance_tau);
+                    int overuse    = (is_min_edge && (used_since_join >= K_used));
+
+                    if(divergence || overuse){
+                        leave_candidates = array_insert(leave_candidates, e);
+                    }
+                }
+
+                long c = array_len(leave_candidates);
+                for(long k = 0; k < c && leaves_this_tick < (long)max_leaves_per_group_tick; k++){
+                    struct edge* e = array_get(leave_candidates, k);
+                    remove_edge_from_group(group, e);
+                    e->group = NULL;
+                    e->last_leave_time = simulation->current_time;
+
+                    group_add_queue = list_insert_sorted_position(group_add_queue, e, (long (*)(void *)) get_edge_balance);
+
+                    leaves_this_tick++;
+                    scheduled_construct = 1;
+                }
+
+                array_free(leave_candidates);
             }
         }
+    }
+
+    /* schedule CONSTRUCTGROUPS once if any leave/close occurred (or rely on above immediate schedule for close) */
+    if(scheduled_construct){
+        uint64_t next_event_time = simulation->current_time + net_params.group_broadcast_delay;
+        struct event* next_event = new_event(next_event_time, CONSTRUCTGROUPS, event->node_id, event->payment);
+        simulation->events = heap_insert(simulation->events, next_event, compare_event);
     }
 
     return group_add_queue;
 }
 
+/* ====== UPDATED: construct_groups to set join_time / flows_at_join on join ====== */
 struct element* construct_groups(struct simulation* simulation, struct element* group_add_queue, struct network *network, struct network_params net_params){
 
     if(group_add_queue == NULL) return group_add_queue;
@@ -773,6 +919,14 @@ struct element* construct_groups(struct simulation* simulation, struct element* 
     for(struct element* iterator = group_add_queue; iterator != NULL; iterator = iterator->next){
 
         struct edge* requesting_edge = iterator->data;
+        if (net_params.enable_group_event_csv && csv_group_events) {
+            fprintf(csv_group_events,
+                "construct_begin,%llu,-,%ld,seed,balance=%" PRIu64 "\n",
+                (unsigned long long)simulation->current_time,
+                (long)requesting_edge->id, requesting_edge->balance);
+            // fflush(csv_group_events); // 実行中に即確認したいなら有効化
+        }
+
 
         // new group
         struct group* group = malloc(sizeof(struct group));
@@ -830,13 +984,44 @@ struct element* construct_groups(struct simulation* simulation, struct element* 
             // init group_cap
             update_group(group, net_params, simulation->current_time);
             network->groups = array_insert(network->groups, group);
-            for(int i = 0; i < array_len(group->edges); i++){
-                struct edge* group_member_edge = array_get(group->edges, i);
-                group_add_queue = list_delete(group_add_queue, &iterator, group_member_edge, (int (*)(void *, void *)) is_equal_edge);
-                group_member_edge->group = group;
+            if (net_params.enable_group_event_csv && csv_group_events) {
+                fprintf(csv_group_events,
+                    "construct_commit,%llu,%ld,-,,members:",
+                    (unsigned long long)simulation->current_time, (long)group->id);
+                for (int k = 0; k < array_len(group->edges); k++) {
+                    struct edge* me = array_get(group->edges, k);
+                    fprintf(csv_group_events, "%ld%s", me->id, (k+1<array_len(group->edges)) ? "-" : "");
+                }
+                fprintf(csv_group_events, ",group_cap=%" PRIu64 ",min=%" PRIu64 ",max=%" PRIu64 "\n",
+                        group->group_cap, group->min_cap_limit, group->max_cap_limit);
             }
+
+            for (int i = 0; i < array_len(group->edges); i++){
+                struct edge* group_member_edge = array_get(group->edges, i);
+                group_add_queue = list_delete(group_add_queue, &iterator, group_member_edge,
+                                              (int (*)(void *, void *)) is_equal_edge);
+                group_member_edge->group = group;
+
+                /* === reset join metadata at (re)join === */
+                group_member_edge->join_time     = simulation->current_time;
+                group_member_edge->flows_at_join = group_member_edge->tot_flows;
+                /* === INSERT: per-edge tau を初期化 === */
+                group_member_edge->tolerance_tau = net_params.tau_randomize
+                    ? (gsl_rng_uniform(simulation->random_generator) *
+                       (net_params.tau_max - net_params.tau_min) + net_params.tau_min)
+                    : net_params.tau_default;
+                /* === END INSERT === */
+            }
+
             if(iterator == NULL) break;
         }else{
+            if (net_params.enable_group_event_csv && csv_group_events) {
+                long sz = array_len(group->edges);
+                fprintf(csv_group_events,
+                    "construct_abort,%llu,-,-,,size=%ld,needed=%d\n",
+                    (unsigned long long)simulation->current_time, sz, net_params.group_size);
+            }
+
             array_free(group->edges);
             free(group);
         }
