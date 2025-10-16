@@ -912,35 +912,32 @@ struct element* request_group_update(struct event* event, struct simulation* sim
 }
 
 /* ====== UPDATED: construct_groups to set join_time / flows_at_join on join ====== */
-struct element* construct_groups(struct simulation* simulation, struct element* group_add_queue, struct network *network, struct network_params net_params){
+struct element* construct_groups(struct simulation* simulation, struct element* group_add_queue, struct network *network, struct network_params net_params)
+{
+    if (group_add_queue == NULL) return group_add_queue;
 
-    if(group_add_queue == NULL) return group_add_queue;
-
-    for(struct element* iterator = group_add_queue; iterator != NULL; iterator = iterator->next){
+    for (struct element* iterator = group_add_queue; iterator != NULL; iterator = iterator->next) {
 
         struct edge* requesting_edge = iterator->data;
-        if (net_params.enable_group_event_csv && csv_group_events) {
-            fprintf(csv_group_events,
-                "construct_begin,%llu,-,%ld,seed,balance=%" PRIu64 "\n",
-                (unsigned long long)simulation->current_time,
-                (long)requesting_edge->id, requesting_edge->balance);
-            // fflush(csv_group_events); // 実行中に即確認したいなら有効化
-        }
 
+        // 構築開始ログ（固定11列仕様）
+        ge_construct_begin((uint64_t)simulation->current_time, requesting_edge->id);
 
         // new group
         struct group* group = malloc(sizeof(struct group));
         group->edges = array_initialize(net_params.group_size);
         group->edges = array_insert(group->edges, requesting_edge);
-        if(net_params.use_conventional_method) {
+
+        if (net_params.use_conventional_method) {
             group->max_cap_limit = requesting_edge->balance + (uint64_t)((float)requesting_edge->balance * net_params.group_limit_rate);
             group->min_cap_limit = requesting_edge->balance - (uint64_t)((float)requesting_edge->balance * net_params.group_limit_rate);
-            if(group->max_cap_limit < requesting_edge->balance) group->max_cap_limit = UINT64_MAX;
-            if(group->min_cap_limit > requesting_edge->balance) group->min_cap_limit = 0;
-        }else {
+            if (group->max_cap_limit < requesting_edge->balance) group->max_cap_limit = UINT64_MAX;
+            if (group->min_cap_limit > requesting_edge->balance) group->min_cap_limit = 0;
+        } else {
             group->max_cap_limit = (uint64_t)((float)requesting_edge->balance * net_params.group_max_cap_ratio);
             group->min_cap_limit = (uint64_t)((float)requesting_edge->balance * net_params.group_min_cap_ratio);
         }
+
         group->id = array_len(network->groups);
         group->is_closed = 0;
         group->constructed_time = simulation->current_time;
@@ -949,78 +946,90 @@ struct element* construct_groups(struct simulation* simulation, struct element* 
         // search the closest balance edge from neighbor
         struct element* bottom = iterator;
         struct element* top = iterator;
-        while(bottom != NULL || top != NULL){
+        while (bottom != NULL || top != NULL) {
 
             // both edge are out of group limit, skip this group
-            if(top != NULL && bottom != NULL){
+            if (top != NULL && bottom != NULL) {
                 struct edge* bottom_edge = bottom->data;
                 struct edge* top_edge = top->data;
-                if(bottom_edge->balance < group->min_cap_limit && top_edge->balance > group->max_cap_limit){
+                if (bottom_edge->balance < group->min_cap_limit && top_edge->balance > group->max_cap_limit) {
                     break;
                 }
             }
 
             // join bottom and top edge to group
-            if(bottom != NULL){
+            if (bottom != NULL) {
                 struct edge* bottom_edge = bottom->data;
-                if(can_join_group(group, bottom_edge)){
+                if (can_join_group(group, bottom_edge)) {
                     group->edges = array_insert(group->edges, bottom_edge);
-                    if(array_len(group->edges) == net_params.group_size) break;
+                    if (array_len(group->edges) == net_params.group_size) break;
                 }
                 bottom = bottom->prev;
             }
-            if(top != NULL){
+            if (top != NULL) {
                 struct edge* top_edge = top->data;
-                if(can_join_group(group, top_edge)){
+                if (can_join_group(group, top_edge)) {
                     group->edges = array_insert(group->edges, top_edge);
-                    if(array_len(group->edges) == net_params.group_size) break;
+                    if (array_len(group->edges) == net_params.group_size) break;
                 }
                 top = top->next;
             }
         }
 
         // register group
-        if(array_len(group->edges) == net_params.group_size){
-            // init group_cap
+        if (array_len(group->edges) == net_params.group_size) {
+            // init group_cap etc.
             update_group(group, net_params, simulation->current_time);
             network->groups = array_insert(network->groups, group);
-            if (net_params.enable_group_event_csv && csv_group_events) {
-                fprintf(csv_group_events,
-                    "construct_commit,%llu,%ld,-,,members:",
-                    (unsigned long long)simulation->current_time, (long)group->id);
-                for (int k = 0; k < array_len(group->edges); k++) {
-                    struct edge* me = array_get(group->edges, k);
-                    fprintf(csv_group_events, "%ld%s", me->id, (k+1<array_len(group->edges)) ? "-" : "");
-                }
-                fprintf(csv_group_events, ",group_cap=%" PRIu64 ",min=%" PRIu64 ",max=%" PRIu64 "\n",
-                        group->group_cap, group->min_cap_limit, group->max_cap_limit);
+
+            // メンバーIDを "id-id-..." に連結して commit ログ（固定11列）を出す
+            char members_buf[8192]; members_buf[0] = '\0';
+            for (int k = 0; k < array_len(group->edges); k++) {
+                struct edge* me = array_get(group->edges, k);
+                char tmp[64];
+                snprintf(tmp, sizeof(tmp), "%s%ld", (k == 0 ? "" : "-"), me->id);
+                strncat(members_buf, tmp, sizeof(members_buf) - strlen(members_buf) - 1);
             }
 
-            for (int i = 0; i < array_len(group->edges); i++){
+            ge_construct_commit(
+                (uint64_t)simulation->current_time,
+                group->id,
+                members_buf,
+                group->group_cap,
+                /* 実キャパの min/max が未実装の場合は limit を暫定出力 */
+                group->min_cap_limit,
+                group->max_cap_limit
+            );
+
+            for (int i = 0; i < array_len(group->edges); i++) {
                 struct edge* group_member_edge = array_get(group->edges, i);
-                group_add_queue = list_delete(group_add_queue, &iterator, group_member_edge,
-                                              (int (*)(void *, void *)) is_equal_edge);
+                group_add_queue = list_delete(
+                    group_add_queue, &iterator, group_member_edge,
+                    (int (*)(void *, void *)) is_equal_edge
+                );
                 group_member_edge->group = group;
 
                 /* === reset join metadata at (re)join === */
                 group_member_edge->join_time     = simulation->current_time;
                 group_member_edge->flows_at_join = group_member_edge->tot_flows;
-                /* === INSERT: per-edge tau を初期化 === */
+                /* === per-edge tau 初期化 === */
                 group_member_edge->tolerance_tau = net_params.tau_randomize
                     ? (gsl_rng_uniform(simulation->random_generator) *
                        (net_params.tau_max - net_params.tau_min) + net_params.tau_min)
                     : net_params.tau_default;
-                /* === END INSERT === */
+                /* === END === */
             }
 
-            if(iterator == NULL) break;
-        }else{
-            if (net_params.enable_group_event_csv && csv_group_events) {
-                long sz = array_len(group->edges);
-                fprintf(csv_group_events,
-                    "construct_abort,%llu,-,-,,size=%ld,needed=%d\n",
-                    (unsigned long long)simulation->current_time, sz, net_params.group_size);
-            }
+            if (iterator == NULL) break;
+
+        } else {
+            // 失敗分岐：必要人数に満たずに終了 → abort ログ（固定11列）
+            ge_construct_abort(
+                (uint64_t)simulation->current_time,
+                requesting_edge->id,
+                (int)array_len(group->edges),
+                (int)net_params.group_size
+            );
 
             array_free(group->edges);
             free(group);

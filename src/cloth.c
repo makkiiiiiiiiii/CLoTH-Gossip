@@ -588,8 +588,18 @@ int main(int argc, char *argv[]) {
   }
   strcpy(output_dir_name, argv[1]);
 
-  read_input(&net_params, &pay_params); //入力パラメータの読み込み
+  {
+    DIR* results_dir = opendir(output_dir_name);
+    if(!results_dir){
+      printf("cloth.c: Cannot find the output directory. The output will be stored in the current directory.\n");
+      strcpy(output_dir_name, "./");
+    } else {
+      closedir(results_dir);
+    }
+  }
 
+  read_input(&net_params, &pay_params); //入力パラメータの読み込み
+  group_events_open(output_dir_name);
   simulation = malloc(sizeof(struct simulation));
 
   simulation->random_generator = initialize_random_generator();
@@ -714,7 +724,7 @@ int main(int argc, char *argv[]) {
   printf("Time consumed by simulation events: %lf s\n", time_spent);
 
   write_output(network, payments, output_dir_name); //シミュレーション結果の出力
-  if (csv_group_events) { fclose(csv_group_events); csv_group_events = NULL; }
+  group_events_close();
 
     list_free(group_add_queue);
     free(simulation->random_generator);

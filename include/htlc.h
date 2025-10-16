@@ -50,6 +50,4 @@ struct element* request_group_update(struct event* event, struct simulation* sim
 // return `struct element* group_add_queue`
 struct element* construct_groups(struct simulation* simulation, struct element* group_add_queue, struct network *network, struct network_params net_params);
 
-extern FILE* csv_group_events;
-
 #endif
