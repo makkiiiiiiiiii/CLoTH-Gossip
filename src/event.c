@@ -82,36 +82,68 @@ void group_events_close(void) {
 
 void ge_construct_begin(uint64_t time, long seed_edge_id) {
     if (!csv_group_events) return;
-    //                           type           time               group_id edge_id reason size needed members group_cap min  max
-    fprintf(csv_group_events, "construct_begin,%" PRIu64 ",-,"    "%ld"   ",seed,,,,,,\n",  time,       seed_edge_id);
+    // type,time,group_id,edge_id,reason,size,needed,members,group_cap,min,max
+    fprintf(csv_group_events,
+            "construct_begin,%" PRIu64 ",-," "%ld" ",seed,,,,,,\n",
+            time, seed_edge_id);
 }
 
 void ge_construct_abort(uint64_t time, long seed_edge_id, int size, int needed) {
     if (!csv_group_events) return;
-    //                           type           time               group_id edge_id reason size needed members group_cap min max
-    fprintf(csv_group_events, "construct_abort,%" PRIu64 ",-,"    "%ld"   ",,%d,%d,,,,\n",  time,       seed_edge_id,     size, needed);
+    // type,time,group_id,edge_id,reason,size,needed,members,group_cap,min,max
+    fprintf(csv_group_events,
+            "construct_abort,%" PRIu64 ",-," "%ld" ",,%d,%d,,,,\n",
+            time, seed_edge_id, size, needed);
 }
-
 
 void ge_construct_commit(uint64_t time, long group_id,
                          const char* members_dash_joined,
                          uint64_t group_cap, uint64_t min_cap, uint64_t max_cap) {
     if (!csv_group_events) return;
+    // type,time,group_id,edge_id,reason,size,needed,members,group_cap,min,max
     fprintf(csv_group_events,
-        "construct_commit,%" PRIu64 ",%ld,,,%s,%s,%s,%"
-        PRIu64 ",%" PRIu64 ",%" PRIu64 "\n",
-        time, group_id,
-        "", "",                     // size,needed は空
-        members_dash_joined ? members_dash_joined : "",
-        group_cap, min_cap, max_cap);
+            "construct_commit,%" PRIu64 ",%ld,,,%s,%s,%s,%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n",
+            time, group_id,
+            "", "",                                   // size, needed（空）
+            members_dash_joined ? members_dash_joined : "",
+            group_cap, min_cap, max_cap);
 }
 
 void ge_close(uint64_t time, long group_id, const char* reason,
               const char* members_dash_joined) {
     if (!csv_group_events) return;
+    // type,time,group_id,edge_id,reason,size,needed,members,group_cap,min,max
     fprintf(csv_group_events,
-        "close,%" PRIu64 ",%ld,,%s,,,%s,,,\n",
-        time, group_id,
-        reason ? reason : "",
-        members_dash_joined ? members_dash_joined : "");
+            "close,%" PRIu64 ",%ld,,%s,,,%s,,,\n",
+            time, group_id,
+            reason ? reason : "",
+            members_dash_joined ? members_dash_joined : "");
+}
+void ge_join(uint64_t time, long group_id, long edge_id,
+             const char* reason, uint64_t group_cap,
+             uint64_t min_cap, uint64_t max_cap) {
+    if (!csv_group_events) return;
+    // type,time,group_id,edge_id,reason,size,needed,members,group_cap,min,max
+    fprintf(csv_group_events,
+        "join,%" PRIu64 ",%ld,%ld,%s,,,,%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n",
+        time, group_id, edge_id, (reason ? reason : ""),
+        group_cap, min_cap, max_cap);
+}
+
+void ge_leave(uint64_t time, long group_id, long edge_id,
+              const char* reason, uint64_t group_cap,
+              uint64_t min_cap, uint64_t max_cap) {
+    if (!csv_group_events) return;
+    fprintf(csv_group_events,
+        "leave,%" PRIu64 ",%ld,%ld,%s,,,,%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n",
+        time, group_id, edge_id, (reason ? reason : ""),
+        group_cap, min_cap, max_cap);
+}
+
+void ge_update_group(uint64_t time, long group_id,
+                     uint64_t group_cap, uint64_t min_cap, uint64_t max_cap) {
+    if (!csv_group_events) return;
+    fprintf(csv_group_events,
+        "update_group,%" PRIu64 ",%ld,,update,,,,%" PRIu64 ",%" PRIu64 ",%" PRIu64 "\n",
+        time, group_id, group_cap, min_cap, max_cap);
 }

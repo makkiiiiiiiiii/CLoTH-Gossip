@@ -23,7 +23,6 @@
 #include <sys/types.h>
 #include <errno.h>
 
-FILE* csv_group_events = NULL;
 
 /* This file contains the main, where the simulation logic is executed;
    additionally, it contains the the initialization functions,
@@ -266,7 +265,7 @@ void initialize_input_parameters(struct network_params *net_params, struct payme
   net_params->max_leaves_per_group_tick = 1;
 
   /* logging defaults */
-  net_params->enable_group_event_csv = 0;
+  net_params->enable_group_event_csv = 1;
   strncpy(net_params->group_event_csv_filename, "group_events.csv",
           sizeof(net_params->group_event_csv_filename));
   net_params->group_event_csv_filename[sizeof(net_params->group_event_csv_filename)-1] = '\0';
@@ -598,8 +597,11 @@ int main(int argc, char *argv[]) {
     }
   }
 
-  read_input(&net_params, &pay_params); //入力パラメータの読み込み
-  group_events_open(output_dir_name);
+  read_input(&net_params, &pay_params); // 入力パラメータの読み込み
+  /* パラメータ読込完了後にフラグを見てオープン */
+  if (net_params.enable_group_event_csv) {
+    group_events_open(output_dir_name);
+  }
   simulation = malloc(sizeof(struct simulation));
 
   simulation->random_generator = initialize_random_generator();
@@ -607,20 +609,6 @@ int main(int argc, char *argv[]) {
   network = initialize_network(net_params, simulation->random_generator); //ネットワークの初期化
   n_nodes = array_len(network->nodes);
   n_edges = array_len(network->edges);
-  if (net_params.enable_group_event_csv) {
-    const char* cfg = net_params.group_event_csv_filename; // "result/group_events.csv"
-    char ge_path[512];
-    // 相対パス→そのままCWD基準（cmake-build-debugで実行してるなら result/～）
-    strncpy(ge_path, cfg, sizeof(ge_path)); ge_path[sizeof(ge_path)-1] = '\0';
-    ensure_parent_dir(ge_path);
-    csv_group_events = fopen(ge_path, "w");
-    if (!csv_group_events) {
-      fprintf(stderr, "WARN: cannot open group events file <%s>\n", ge_path);
-    } else {
-      fprintf(csv_group_events, "type,time,group_id,edge_id,reason,detail\n"); // ヘッダ
-      fflush(csv_group_events);
-    }
-  }
 
     // add edge which is not a member of any group to group_add_queue
     struct element* group_add_queue = NULL;

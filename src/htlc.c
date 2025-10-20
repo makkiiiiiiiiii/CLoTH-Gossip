@@ -737,18 +737,16 @@ struct element* request_group_update(struct event* event, struct simulation* sim
         if(edge->group != NULL) {
             struct group* group = edge->group;
             int close_flg = update_group(group, net_params, simulation->current_time);
-
-            if(close_flg){
-                if (net_params.enable_group_event_csv && csv_group_events) {
-                    fprintf(csv_group_events,
-                        "close,%llu,%ld,-,update_violation,members:",
-                        (unsigned long long)simulation->current_time, (long)group->id);
-                    for (long j = 0; j < array_len(group->edges); j++){
-                        struct edge* ee = array_get(group->edges, j);
-                        fprintf(csv_group_events, "%ld%s", ee->id, (j+1<array_len(group->edges))?"-":"");
-                    }
-                    fprintf(csv_group_events, "\n");
+            if (close_flg) {
+                // メンバーを外す前に "id-id-..." を作る
+                char members_buf[8192]; members_buf[0] = '\0';
+                for (long j = 0; j < array_len(group->edges); j++) {
+                    struct edge* ee = array_get(group->edges, j);
+                    char tmp[64];
+                    snprintf(tmp, sizeof(tmp), "%s%ld", (j==0 ? "" : "-"), ee->id);
+                    strncat(members_buf, tmp, sizeof(members_buf) - strlen(members_buf) - 1);
                 }
+                ge_close((uint64_t)simulation->current_time, group->id, "update_violation", members_buf);
 
                 group->is_closed = simulation->current_time;
 
@@ -811,13 +809,21 @@ struct element* request_group_update(struct event* event, struct simulation* sim
                         }
                         uint64_t used_since_join = (e->tot_flows >= e->flows_at_join)
                                                    ? (e->tot_flows - e->flows_at_join) : 0;
-                        const char* reason = (UL >= e->tolerance_tau) ? "UL" : "K";
-                        fprintf(csv_group_events,
-                            "leave,%llu,%ld,%ld,%s,UL=%.5f,tau=%.5f,used=%" PRIu64 "\n",
-                            (unsigned long long)simulation->current_time,
-                            (long)group->id, (long)e->id, reason,
-                            UL, e->tolerance_tau, used_since_join);
+
+                        // 理由の詳細はセミコロン区切りで（CSV列ずれ回避）
+                        char reason_buf[128];
+                        // 例: "UL=0.42;used=3;rule=tau" など。必要に応じて τ/CUL/連続使用数など追加。
+                        snprintf(reason_buf, sizeof(reason_buf),
+                                 "UL=%.6f;used=%" PRIu64, UL, used_since_join);
+
+                        ge_leave((uint64_t)simulation->current_time,
+                                 group->id,
+                                 e->id,
+                                 reason_buf,
+                                 group->group_cap,
+                                 0, 0);
                     }
+
                     /* remove from group and enqueue */
                     remove_edge_from_group(group, e);
                     e->group = NULL;
@@ -916,12 +922,19 @@ struct element* construct_groups(struct simulation* simulation, struct element* 
 {
     if (group_add_queue == NULL) return group_add_queue;
 
+    /* 同一シードの構築試行で重複ログを防ぐための局所フラグ */
+    int logged_begin = 0;
+    int logged_abort = 0;
+
     for (struct element* iterator = group_add_queue; iterator != NULL; iterator = iterator->next) {
 
         struct edge* requesting_edge = iterator->data;
 
-        // 構築開始ログ（固定11列仕様）
-        ge_construct_begin((uint64_t)simulation->current_time, requesting_edge->id);
+        if (!logged_begin && net_params.enable_group_event_csv && csv_group_events) {
+            // 構築開始ログ（固定11列仕様）
+            ge_construct_begin((uint64_t)simulation->current_time, requesting_edge->id);
+            logged_begin = 1;
+        }
 
         // new group
         struct group* group = malloc(sizeof(struct group));
@@ -1012,11 +1025,24 @@ struct element* construct_groups(struct simulation* simulation, struct element* 
                 /* === reset join metadata at (re)join === */
                 group_member_edge->join_time     = simulation->current_time;
                 group_member_edge->flows_at_join = group_member_edge->tot_flows;
+
                 /* === per-edge tau 初期化 === */
                 group_member_edge->tolerance_tau = net_params.tau_randomize
                     ? (gsl_rng_uniform(simulation->random_generator) *
                        (net_params.tau_max - net_params.tau_min) + net_params.tau_min)
                     : net_params.tau_default;
+
+                /* === join ログ === */
+                if (net_params.enable_group_event_csv && csv_group_events) {
+                    // group_cap は update_group 後なので group->group_cap が最新
+                    // min/max はここで未保持なら 0 で良い（または空にしたい場合は fprintf 側で ,, を使う実装に変えてください）
+                    ge_join((uint64_t)simulation->current_time,
+                            group->id,
+                            group_member_edge->id,
+                            "join",                      // 詳細は不要なら固定文言
+                            group->group_cap,
+                            0, 0);
+                }
                 /* === END === */
             }
 
@@ -1024,12 +1050,13 @@ struct element* construct_groups(struct simulation* simulation, struct element* 
 
         } else {
             // 失敗分岐：必要人数に満たずに終了 → abort ログ（固定11列）
-            ge_construct_abort(
-                (uint64_t)simulation->current_time,
-                requesting_edge->id,
-                (int)array_len(group->edges),
-                (int)net_params.group_size
-            );
+            if (!logged_abort && net_params.enable_group_event_csv && csv_group_events) {
+                ge_construct_abort((uint64_t)simulation->current_time,
+                                   requesting_edge->id,
+                                   (int)array_len(group->edges),   // 現在集まった人数
+                                   (int)net_params.group_size);    // 目標人数
+                logged_abort = 1;
+            }
 
             array_free(group->edges);
             free(group);

@@ -50,4 +50,15 @@ void ge_construct_commit(uint64_t time, long group_id,
 void ge_close(uint64_t time, long group_id, const char* reason,
               const char* members_dash_joined);
 
+void ge_join(uint64_t time, long group_id, long edge_id,
+             const char* reason, uint64_t group_cap,
+             uint64_t min_cap, uint64_t max_cap);
+
+void ge_leave(uint64_t time, long group_id, long edge_id,
+              const char* reason, uint64_t group_cap,
+              uint64_t min_cap, uint64_t max_cap);
+
+void ge_update_group(uint64_t time, long group_id,
+                     uint64_t group_cap, uint64_t min_cap, uint64_t max_cap);
+
 #endif
