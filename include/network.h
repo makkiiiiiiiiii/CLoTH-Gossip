@@ -111,6 +111,8 @@ struct group {
     uint64_t is_closed; // if not zero, it describes closed time
     uint64_t constructed_time;
     struct element* history; // list of `struct group_update`
+    long     seed_edge_id;
+    uint64_t attempt_id;
 };
 
 

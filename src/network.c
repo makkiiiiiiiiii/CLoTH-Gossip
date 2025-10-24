@@ -416,9 +416,11 @@ int update_group(struct group* group, struct network_params net_params, uint64_t
     }
 
     /*ここで公開最小容量の更新ログを出す(min/maxを算出済みの直後がわかりやすい)*/
-    if (net_params.enable_group_event_csv &&  csv_group_events) {
-        ge_update_group((uint64_t)current_time,group->id,group->group_cap,min,max);
-    }
+  if (net_params.enable_group_event_csv && csv_group_events) {
+       ge_update_group((uint64_t)current_time, group->id,
+                       group->group_cap, group->min_cap, group->max_cap,
+                       group->seed_edge_id, group->attempt_id);
+     }
 
     //record group_update history
     struct group_update* group_update = malloc(sizeof(struct group_update));

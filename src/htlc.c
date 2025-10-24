@@ -746,7 +746,12 @@ struct element* request_group_update(struct event* event, struct simulation* sim
                     snprintf(tmp, sizeof(tmp), "%s%ld", (j==0 ? "" : "-"), ee->id);
                     strncat(members_buf, tmp, sizeof(members_buf) - strlen(members_buf) - 1);
                 }
-                ge_close((uint64_t)simulation->current_time, group->id, "update_violation", members_buf);
+                ge_close((uint64_t)simulation->current_time,
+                group->id,
+                "update_violation",
+                members_buf,           // "a-b-c-d-e" 形式（なければ "" でも可）
+                group->seed_edge_id,   // または requesting_edge->id
+                group->attempt_id);    // または attempt_id
 
                 group->is_closed = simulation->current_time;
 
@@ -821,7 +826,9 @@ struct element* request_group_update(struct event* event, struct simulation* sim
                                  e->id,
                                  reason_buf,
                                  group->group_cap,
-                                 0, 0);
+                                 0,0,
+                                 group->seed_edge_id,
+                                 group->attempt_id);
                     }
 
                     /* remove from group and enqueue */
@@ -917,22 +924,25 @@ struct element* request_group_update(struct event* event, struct simulation* sim
     return group_add_queue;
 }
 
-/* ====== UPDATED: construct_groups to set join_time / flows_at_join on join ====== */
-struct element* construct_groups(struct simulation* simulation, struct element* group_add_queue, struct network *network, struct network_params net_params)
+/* ====== UPDATED: construct_groups ====== */
+struct element* construct_groups(struct simulation* simulation, /*...*/ struct element* group_add_queue,
+                                 struct network *network, struct network_params net_params)
 {
     if (group_add_queue == NULL) return group_add_queue;
 
-    /* 同一シードの構築試行で重複ログを防ぐための局所フラグ */
-    int logged_begin = 0;
-    int logged_abort = 0;
-
+    static uint64_t attempt_counter = 0;  // プロセス全体で単調増加（衝突回避）
     for (struct element* iterator = group_add_queue; iterator != NULL; iterator = iterator->next) {
+        /* シードごとにリセットされる局所フラグ */
+        int logged_begin = 0;
+        int logged_abort = 0;
 
         struct edge* requesting_edge = iterator->data;
+        uint64_t attempt_id = ++attempt_counter; // 1シード試行 = 1 attempt_id
 
-        if (!logged_begin && net_params.enable_group_event_csv && csv_group_events) {
-            // 構築開始ログ（固定11列仕様）
-            ge_construct_begin((uint64_t)simulation->current_time, requesting_edge->id);
+        if (net_params.enable_group_event_csv && csv_group_events && !logged_begin) {
+            ge_construct_begin((uint64_t)simulation->current_time,
+                                requesting_edge->id,               // seed_id を正しく
+                                attempt_id);
             logged_begin = 1;
         }
 
@@ -940,6 +950,8 @@ struct element* construct_groups(struct simulation* simulation, struct element* 
         struct group* group = malloc(sizeof(struct group));
         group->edges = array_initialize(net_params.group_size);
         group->edges = array_insert(group->edges, requesting_edge);
+        group->seed_edge_id = requesting_edge->id;
+        group->attempt_id   = attempt_id;
 
         if (net_params.use_conventional_method) {
             group->max_cap_limit = requesting_edge->balance + (uint64_t)((float)requesting_edge->balance * net_params.group_limit_rate);
@@ -1009,10 +1021,10 @@ struct element* construct_groups(struct simulation* simulation, struct element* 
                 group->id,
                 members_buf,
                 group->group_cap,
-                /* 実キャパの min/max が未実装の場合は limit を暫定出力 */
                 group->min_cap_limit,
-                group->max_cap_limit
-            );
+                group->max_cap_limit,
+                requesting_edge->id,
+                attempt_id);
 
             for (int i = 0; i < array_len(group->edges); i++) {
                 struct edge* group_member_edge = array_get(group->edges, i);
@@ -1041,7 +1053,9 @@ struct element* construct_groups(struct simulation* simulation, struct element* 
                             group_member_edge->id,
                             "join",                      // 詳細は不要なら固定文言
                             group->group_cap,
-                            0, 0);
+                            0, 0,
+                            requesting_edge->id,
+                            attempt_id);
                 }
                 /* === END === */
             }
@@ -1054,7 +1068,8 @@ struct element* construct_groups(struct simulation* simulation, struct element* 
                 ge_construct_abort((uint64_t)simulation->current_time,
                                    requesting_edge->id,
                                    (int)array_len(group->edges),   // 現在集まった人数
-                                   (int)net_params.group_size);    // 目標人数
+                                   (int)net_params.group_size,    // 目標人数
+                                   attempt_id);
                 logged_abort = 1;
             }
 
