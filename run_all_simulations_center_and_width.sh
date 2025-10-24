@@ -70,7 +70,7 @@ for center in $(seq 0.80 0.05 1.20); do
         group_max_cap_ratio=$max_cap_ratio \
         average_payment_amount=1000 \
         variance_payment_amount=100 \
-        n_payments=5000 \
+        n_payments=20000 \
         payment_timeout=-1 \
         mpp=0 \
         use_conventional_method=false \
