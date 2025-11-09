@@ -523,3 +523,28 @@ void free_network(struct network* network){
 
     free(network);
 }
+
+void group_close_once(struct simulation* sim,struct group* g,const char* reason){
+  if (!g) return;
+
+  /* すでに close 済みなら何もしない（冪等） */
+  if (g->is_closed != 0) return;
+
+  /* members を "id-id-..." 形式で組み立て（ログ出力用） */
+  char members_buf[8192]; members_buf[0] = '\0';
+  for (long j = 0; j < array_len(g->edges); j++) {
+    struct edge* ee = array_get(g->edges, j);
+    if (!ee) continue;
+    char tmp[64];
+    snprintf(tmp, sizeof(tmp), "%s%ld", (j == 0 ? "" : "-"), ee->id);
+    strncat(members_buf, tmp, sizeof(members_buf) - strlen(members_buf) - 1);
+  }
+
+  ge_close((uint64_t)sim->current_time, g->id,
+         reason ? reason : "unknown",
+         members_buf,
+         g->seed_edge_id, g->attempt_id);
+
+  /* 状態を close 済みにマーク（以降の重複発火を抑止） */
+  g->is_closed = sim->current_time;
+}

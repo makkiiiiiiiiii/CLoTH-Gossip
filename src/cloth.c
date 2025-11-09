@@ -674,8 +674,10 @@ int main(int argc, char *argv[]) {
       break;
     case CHANNELUPDATEFAIL:
       channel_update_fail(event, simulation, network);
+      break;
     case CHANNELUPDATESUCCESS:
       channel_update_success(event, simulation, network);
+      break;
     case UPDATEGROUP:
       group_add_queue = request_group_update(event, simulation, network, net_params, group_add_queue);
       break;
@@ -696,8 +698,8 @@ int main(int argc, char *argv[]) {
         FILE* progress_file = fopen(progress_filename, "w");
         if(progress_file != NULL){
             fprintf(progress_file, "%f", (float)completed_payments / (float)array_len(payments));
-        }
         fclose(progress_file);
+        }
     }
 
     free(event);
@@ -711,15 +713,35 @@ int main(int argc, char *argv[]) {
   time_spent = (double) (end - begin)/CLOCKS_PER_SEC;
   printf("Time consumed by simulation events: %lf s\n", time_spent);
 
-  write_output(network, payments, output_dir_name); //シミュレーション結果の出力
-  group_events_close();
+  write_output(network, payments, output_dir_name); // シミュレーション結果の出力
 
-    list_free(group_add_queue);
-    free(simulation->random_generator);
-    heap_free(simulation->events);
+  /* ===== finalize: close any still-open groups at simulation end ===== */
+  if (net_params.enable_group_event_csv) {
+    long gcount = array_len(network->groups);
+    for (long i = 0; i < gcount; i++) {
+      struct group* g = array_get(network->groups, i);
+      if (g && g->is_closed == 0) {
+        group_close_once(simulation, g, "simulation_end");
+      }
+    }
+
+    long ecnt = array_len(network->edges);
+    for (long i = 0; i < ecnt; i++) {
+      struct edge* e = array_get(network->edges, i);
+      if (!e) continue;
+      if (e && e->group && e->group->is_closed == 0) {
+        group_close_once(simulation, e->group, "simulation_end");
+      }
+    }
+    group_events_close();
+  }
+
+  list_free(group_add_queue);
+  free(simulation->random_generator);
+  heap_free(simulation->events);
   free(simulation);
 
-//    free_network(network);
+  // free_network(network);
 
   return 0;
 }
