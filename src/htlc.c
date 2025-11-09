@@ -111,7 +111,7 @@ void set_node_pair_result_success(struct element** results, long from_node_id, l
 }
 
 /* set the result of a node pair as success: it means that a payment failed when passing through  an edge connecting the two nodes of the node pair.
-   This information is used by the sender node to find a route that maximizes the possibilities of successfully sending a payment */
+   This information is used by the sender node to find a route that maximimizes the possibilities of successfully sending a payment */
 void set_node_pair_result_fail(struct element** results, long from_node_id, long to_node_id, uint64_t fail_amount, uint64_t fail_time){
   struct node_pair_result* result;
 
@@ -381,6 +381,7 @@ void send_payment(struct event* event, struct simulation* simulation, struct net
 
   // update balance
   uint64_t prev_balance = next_edge->balance;
+  (void)prev_balance; /* silence unused warning */
   next_edge->balance -= first_route_hop->amount_to_forward;
 
   next_edge->tot_flows += 1;
@@ -412,7 +413,7 @@ void forward_payment(struct event* event, struct simulation* simulation, struct 
   next_route_hop=get_route_hop(node->id, route->route_hops, 1);
   previous_route_hop = get_route_hop(node->id, route->route_hops, 0);
   is_last_hop = next_route_hop->to_node_id == payment->receiver;
-    next_route_hop->edges_lock_start_time = simulation->current_time;
+  next_route_hop->edges_lock_start_time = simulation->current_time;
 
   if(!is_present(next_route_hop->edge_id, node->open_edges)) {
     printf("ERROR (forward_payment): edge %ld is not an edge of node %ld \n", next_route_hop->edge_id, node->id);
@@ -433,34 +434,6 @@ void forward_payment(struct event* event, struct simulation* simulation, struct 
     return;
   }
 
-  // BEGIN -- NON-STRICT FORWARDING (cannot simulate it because the current blokchain height is needed)
-  /* can_send_htlc = 0; */
-  /* prev_edge = array_get(network->edges,previous_route_hop->edge_id); */
-  /* for(i=0; i<array_len(node->open_edges); i++) { */
-  /*   next_edge = array_get(node->open_edges, i); */
-  /*   if(next_edge->to_node_id != next_route_hop->to_node_id) continue; */
-  /*   can_send_htlc = check_balance_and_policy(next_edge, prev_edge, previous_route_hop, next_route_hop, is_last_hop); */
-  /*   if(can_send_htlc) break; */
-  /* } */
-
-  /* if(!can_send_htlc){ */
-  /*   next_edge = array_get(network->edges,next_route_hop->edge_id); */
-  /*   printf("no balance: %ld < %ld\n", next_edge->balance, next_route_hop->amount_to_forward ); */
-  /*   printf("prev_hop->timelock, next_hop->timelock: %d, %d + %d\n", previous_route_hop->timelock, next_route_hop->timelock, next_edge->policy.timelock ); */
-  /*   payment->error.type = NOBALANCE; */
-  /*   payment->error.hop = next_route_hop; */
-  /*   payment->no_balance_count += 1; */
-  /*   prev_node_id = previous_route_hop->from_node_id; */
-  /*   event_type = prev_node_id == payment->sender ? RECEIVEFAIL : FORWARDFAIL; */
-  /*   next_event_time = simulation->current_time + 100 + gsl_ran_ugaussian(simulation->random_generator);//prev_channel->latency; */
-  /*   next_event = new_event(next_event_time, event_type, prev_node_id, event->payment); */
-  /*   simulation->events = heap_insert(simulation->events, next_event, compare_event); */
-  /*   return; */
-  /* } */
-
-  /* next_route_hop->edge_id = next_edge->id; */
-  //END -- NON-STRICT FORWARDING
-
   // STRICT FORWARDING
   prev_edge = array_get(network->edges,previous_route_hop->edge_id);
   next_edge = array_get(network->edges, next_route_hop->edge_id);
@@ -480,6 +453,7 @@ void forward_payment(struct event* event, struct simulation* simulation, struct 
 
   // update balance
   uint64_t prev_balance = next_edge->balance;
+  (void)prev_balance;
   next_edge->balance -= next_route_hop->amount_to_forward;
 
   next_edge->tot_flows += 1;
@@ -628,6 +602,7 @@ void forward_fail(struct event* event, struct simulation* simulation, struct net
 
   /* since the payment failed, the balance must be brought back to the state before the payment occurred */
   uint64_t prev_balance = next_edge->balance;
+  (void)prev_balance;
   next_edge->balance += next_hop->amount_to_forward;
 
   prev_hop = get_route_hop(event->node_id, payment->route->route_hops, 0);
@@ -661,59 +636,42 @@ void receive_fail(struct event* event, struct simulation* simulation, struct net
     }
 
     uint64_t prev_balance = next_edge->balance;
+    (void)prev_balance;
     next_edge->balance += first_hop->amount_to_forward;
   }
 
-/* print FAIL_NO_BALANCE error
-    struct channel* channel = array_get(network->channels, error_edge->channel_id);
-    printf("\n\tERROR : RECEIVE_FAIL on sending payment(id=%ld, amount=%lu) at edge(id=%ld, balance=%lu, htlc_max_msat=%lu, channel_capacity=%lu) ", payment->id, payment->amount, error_edge->id, error_edge->balance, ((struct channel_update*)(error_edge->channel_updates->data))->htlc_maximum_msat, channel->capacity);
-    printf("\n\tPATH  : ");
-    for(int i = 0; i < array_len(payment->route->route_hops); i++){
-        struct route_hop* hop = array_get(payment->route->route_hops, i);
-        struct edge* edge = array_get(network->edges, hop->edge_id);
-        printf("(edge_id=%ld,edge_balance=%lu,", edge->id, edge->balance);
-        if(edge->group != NULL) {
-            printf("group_id=%ld,group_cap=%lu)", edge->group->id, edge->group->group_cap);
-        }else{
-            printf("group_id=NULL,group_cap=NULL)");
-        }
-        if (i != array_len(payment->route->route_hops) - 1) printf("-");
-    }
-    printf("\n");
-*/
-
-    // record channel_update
-    struct channel_update *channel_update = malloc(sizeof(struct channel_update));
-    channel_update->htlc_maximum_msat = payment->amount;
-    channel_update->edge_id = error_edge->id;
-    channel_update->time = simulation->current_time;
-    error_edge->channel_updates = push(error_edge->channel_updates, channel_update);
+  /* record channel_update */
+  struct channel_update *channel_update = malloc(sizeof(struct channel_update));
+  channel_update->htlc_maximum_msat = payment->amount;
+  channel_update->edge_id = error_edge->id;
+  channel_update->time = simulation->current_time;
+  error_edge->channel_updates = push(error_edge->channel_updates, channel_update);
 
   add_attempt_history(payment, network, simulation->current_time, 0);
 
-    for(int i = 0; i < array_len(payment->route->route_hops); i++){
-        struct route_hop* route_hop = array_get(payment->route->route_hops, i);
-        struct edge* edge = array_get(network->edges, route_hop->edge_id);
+  for(int i = 0; i < array_len(payment->route->route_hops); i++){
+      struct route_hop* route_hop = array_get(payment->route->route_hops, i);
+      struct edge* edge = array_get(network->edges, route_hop->edge_id);
 
-        struct edge_locked_balance_and_duration* edge_locked_balance_time = malloc(sizeof(struct edge_locked_balance_and_duration));
-        edge_locked_balance_time->locked_balance = route_hop->amount_to_forward;
-        edge_locked_balance_time->locked_start_time = route_hop->edges_lock_start_time;
-        edge_locked_balance_time->locked_end_time = route_hop->edges_lock_end_time;
-        if (route_hop->edges_lock_start_time > route_hop->edges_lock_end_time){
-            edge_locked_balance_time->locked_end_time = simulation->current_time;
-        }
-        edge->edge_locked_balance_and_durations = push(edge->edge_locked_balance_and_durations, edge_locked_balance_time);
+      struct edge_locked_balance_and_duration* edge_locked_balance_time = malloc(sizeof(struct edge_locked_balance_and_duration));
+      edge_locked_balance_time->locked_balance = route_hop->amount_to_forward;
+      edge_locked_balance_time->locked_start_time = route_hop->edges_lock_start_time;
+      edge_locked_balance_time->locked_end_time = route_hop->edges_lock_end_time;
+      if (route_hop->edges_lock_start_time > route_hop->edges_lock_end_time){
+          edge_locked_balance_time->locked_end_time = simulation->current_time;
+      }
+      edge->edge_locked_balance_and_durations = push(edge->edge_locked_balance_and_durations, edge_locked_balance_time);
 
-        if(payment->error.hop->edge_id == edge->id) break;
-    }
+      if(payment->error.hop->edge_id == edge->id) break;
+  }
 
   next_event_time = simulation->current_time;
   next_event = new_event(next_event_time, FINDPATH, payment->sender, payment);
   simulation->events = heap_insert(simulation->events, next_event, compare_event);
 
-    // channel update broadcast event
-    struct event *channel_update_event = new_event(simulation->current_time + net_params.group_broadcast_delay, CHANNELUPDATEFAIL, node->id, payment);
-    simulation->events = heap_insert(simulation->events, channel_update_event, compare_event);
+  /* channel update broadcast event */
+  struct event *channel_update_event = new_event(simulation->current_time + net_params.group_broadcast_delay, CHANNELUPDATEFAIL, node->id, payment);
+  simulation->events = heap_insert(simulation->events, channel_update_event, compare_event);
 }
 
 /* ====== UPDATED: request_group_update with leave/rejoin mechanism ====== */
@@ -726,7 +684,6 @@ struct element* request_group_update(struct event* event, struct simulation* sim
                            * (uint64_t)net_params.average_payment_forward_interval;
     const uint32_t K_used = (uint32_t)net_params.k_used_on_min_edge;
     const uint32_t max_leaves_per_group_tick = (uint32_t)net_params.max_leaves_per_group_tick;
-
 
     for(long i = 0; i < array_len(event->payment->route->route_hops); i++){
         struct route_hop* hop = array_get(event->payment->route->route_hops, i);
@@ -746,12 +703,14 @@ struct element* request_group_update(struct event* event, struct simulation* sim
                     snprintf(tmp, sizeof(tmp), "%s%ld", (j==0 ? "" : "-"), ee->id);
                     strncat(members_buf, tmp, sizeof(members_buf) - strlen(members_buf) - 1);
                 }
-                ge_close((uint64_t)simulation->current_time,
-                group->id,
-                "update_violation",
-                members_buf,           // "a-b-c-d-e" 形式（なければ "" でも可）
-                group->seed_edge_id,   // または requesting_edge->id
-                group->attempt_id);    // または attempt_id
+                if (net_params.enable_group_event_csv && csv_group_events) {
+                    ge_close((uint64_t)simulation->current_time,
+                             group->id,
+                             "update_violation",
+                             members_buf,
+                             group->seed_edge_id,
+                             group->attempt_id);
+                }
 
                 group->is_closed = simulation->current_time;
 
@@ -817,7 +776,6 @@ struct element* request_group_update(struct event* event, struct simulation* sim
 
                         // 理由の詳細はセミコロン区切りで（CSV列ずれ回避）
                         char reason_buf[128];
-                        // 例: "UL=0.42;used=3;rule=tau" など。必要に応じて τ/CUL/連続使用数など追加。
                         snprintf(reason_buf, sizeof(reason_buf),
                                  "UL=%.6f;used=%" PRIu64, UL, used_since_join);
 
@@ -826,7 +784,8 @@ struct element* request_group_update(struct event* event, struct simulation* sim
                                  e->id,
                                  reason_buf,
                                  group->group_cap,
-                                 0,0,
+                                 group->min_cap,
+                                 group->max_cap,
                                  group->seed_edge_id,
                                  group->attempt_id);
                     }
@@ -925,14 +884,16 @@ struct element* request_group_update(struct event* event, struct simulation* sim
 }
 
 /* ====== UPDATED: construct_groups ====== */
-struct element* construct_groups(struct simulation* simulation, /*...*/ struct element* group_add_queue,
-                                 struct network *network, struct network_params net_params)
+struct element* construct_groups(struct simulation* simulation,
+                                 struct element* group_add_queue,
+                                 struct network *network,
+                                 struct network_params net_params)
 {
     if (group_add_queue == NULL) return group_add_queue;
 
     static uint64_t attempt_counter = 0;  // プロセス全体で単調増加（衝突回避）
+
     for (struct element* iterator = group_add_queue; iterator != NULL; iterator = iterator->next) {
-        /* シードごとにリセットされる局所フラグ */
         int logged_begin = 0;
         int logged_abort = 0;
 
@@ -941,8 +902,8 @@ struct element* construct_groups(struct simulation* simulation, /*...*/ struct e
 
         if (net_params.enable_group_event_csv && csv_group_events && !logged_begin) {
             ge_construct_begin((uint64_t)simulation->current_time,
-                                requesting_edge->id,               // seed_id を正しく
-                                attempt_id);
+                               (long)requesting_edge->id,
+                               (uint64_t)attempt_id);
             logged_begin = 1;
         }
 
@@ -963,7 +924,7 @@ struct element* construct_groups(struct simulation* simulation, /*...*/ struct e
             group->min_cap_limit = (uint64_t)((float)requesting_edge->balance * net_params.group_min_cap_ratio);
         }
 
-        group->id = array_len(network->groups);
+        group->id = -1; /* ★未確定のあいだは -1 のまま */
         group->is_closed = 0;
         group->constructed_time = simulation->current_time;
         group->history = NULL;
@@ -975,26 +936,30 @@ struct element* construct_groups(struct simulation* simulation, /*...*/ struct e
 
             // both edge are out of group limit, skip this group
             if (top != NULL && bottom != NULL) {
-                struct edge* bottom_edge = bottom->data;
-                struct edge* top_edge = top->data;
-                if (bottom_edge->balance < group->min_cap_limit && top_edge->balance > group->max_cap_limit) {
+                struct edge* bottom_edge_chk = bottom->data;
+                struct edge* top_edge_chk = top->data;
+                if (bottom_edge_chk->balance < group->min_cap_limit && top_edge_chk->balance > group->max_cap_limit) {
                     break;
                 }
             }
 
-            // join bottom and top edge to group
+            // join bottom edge to group (if any)
             if (bottom != NULL) {
                 struct edge* bottom_edge = bottom->data;
                 if (can_join_group(group, bottom_edge)) {
                     group->edges = array_insert(group->edges, bottom_edge);
+
                     if (array_len(group->edges) == net_params.group_size) break;
                 }
                 bottom = bottom->prev;
             }
+
+            // join top edge to group (if any)
             if (top != NULL) {
                 struct edge* top_edge = top->data;
                 if (can_join_group(group, top_edge)) {
                     group->edges = array_insert(group->edges, top_edge);
+
                     if (array_len(group->edges) == net_params.group_size) break;
                 }
                 top = top->next;
@@ -1003,11 +968,15 @@ struct element* construct_groups(struct simulation* simulation, /*...*/ struct e
 
         // register group
         if (array_len(group->edges) == net_params.group_size) {
-            // init group_cap etc.
-            update_group(group, net_params, simulation->current_time);
+            /* ★成功確定の瞬間に初めて ID を採番 */
+            group->id = array_len(network->groups);
+
+            // init group_cap/min/max based on real balances
+            update_group(group, net_params, simulation->current_time); /* ← network.c 側で group->id>=0 のみログ */
+
             network->groups = array_insert(network->groups, group);
 
-            // メンバーIDを "id-id-..." に連結して commit ログ（固定11列）を出す
+            // メンバーIDを "id-id-..." に連結
             char members_buf[8192]; members_buf[0] = '\0';
             for (int k = 0; k < array_len(group->edges); k++) {
                 struct edge* me = array_get(group->edges, k);
@@ -1016,15 +985,18 @@ struct element* construct_groups(struct simulation* simulation, /*...*/ struct e
                 strncat(members_buf, tmp, sizeof(members_buf) - strlen(members_buf) - 1);
             }
 
-            ge_construct_commit(
-                (uint64_t)simulation->current_time,
-                group->id,
-                members_buf,
-                group->group_cap,
-                group->min_cap_limit,
-                group->max_cap_limit,
-                requesting_edge->id,
-                attempt_id);
+            if (net_params.enable_group_event_csv && csv_group_events) {
+                ge_construct_commit(
+                    (uint64_t)simulation->current_time,
+                    (long)group->id,
+                    members_buf,
+                    (uint64_t)group->group_cap,
+                    (uint64_t)group->min_cap,
+                    (uint64_t)group->max_cap,
+                    (long)requesting_edge->id,
+                    (uint64_t)attempt_id
+                );
+            }
 
             for (int i = 0; i < array_len(group->edges); i++) {
                 struct edge* group_member_edge = array_get(group->edges, i);
@@ -1034,42 +1006,38 @@ struct element* construct_groups(struct simulation* simulation, /*...*/ struct e
                 );
                 group_member_edge->group = group;
 
-                /* === reset join metadata at (re)join === */
+                /* (re)join メタの初期化 */
                 group_member_edge->join_time     = simulation->current_time;
                 group_member_edge->flows_at_join = group_member_edge->tot_flows;
-
-                /* === per-edge tau 初期化 === */
                 group_member_edge->tolerance_tau = net_params.tau_randomize
                     ? (gsl_rng_uniform(simulation->random_generator) *
                        (net_params.tau_max - net_params.tau_min) + net_params.tau_min)
                     : net_params.tau_default;
 
-                /* === join ログ === */
+                /* join ログ */
                 if (net_params.enable_group_event_csv && csv_group_events) {
-                    // group_cap は update_group 後なので group->group_cap が最新
-                    // min/max はここで未保持なら 0 で良い（または空にしたい場合は fprintf 側で ,, を使う実装に変えてください）
                     ge_join((uint64_t)simulation->current_time,
-                            group->id,
-                            group_member_edge->id,
-                            "join",                      // 詳細は不要なら固定文言
-                            group->group_cap,
-                            0, 0,
-                            requesting_edge->id,
-                            attempt_id);
+                            (long)group->id,
+                            (long)group_member_edge->id,
+                            "join",
+                            (uint64_t)group->group_cap,
+                            (uint64_t)group->min_cap,
+                            (uint64_t)group->max_cap,
+                            (long)requesting_edge->id,
+                            (uint64_t)attempt_id);
                 }
-                /* === END === */
             }
 
             if (iterator == NULL) break;
 
         } else {
-            // 失敗分岐：必要人数に満たずに終了 → abort ログ（固定11列）
+            /* 4-4: 失敗クリーンアップ直前（abortは1回だけ） */
             if (!logged_abort && net_params.enable_group_event_csv && csv_group_events) {
                 ge_construct_abort((uint64_t)simulation->current_time,
-                                   requesting_edge->id,
-                                   (int)array_len(group->edges),   // 現在集まった人数
-                                   (int)net_params.group_size,    // 目標人数
-                                   attempt_id);
+                                   (long)requesting_edge->id,
+                                   (int)array_len(group->edges),   // gathered
+                                   (int)net_params.group_size,     // needed
+                                   (uint64_t)attempt_id);
                 logged_abort = 1;
             }
 

@@ -1,29 +1,25 @@
 #include <string.h>
 #include <gsl/gsl_math.h>
 #include <gsl/gsl_rng.h>
+#include <inttypes.h>
 #include "../include/network.h"
 #include "../include/array.h"
 #include "../include/utils.h"
 #include "../include/event.h"
 
-
 /* Functions in this file generate a payment-channel network where to simulate the execution of payments */
 
-
 struct node* new_node(long id) {
-  struct node* node;
-  node = malloc(sizeof(struct node));
-  node->id=id;
+  struct node* node = (struct node*)malloc(sizeof(struct node));
+  node->id = id;
   node->open_edges = array_initialize(10);
   node->results = NULL;
   node->explored = 0;
   return node;
 }
 
-
 struct channel* new_channel(long id, long direction1, long direction2, long node1, long node2, uint64_t capacity) {
-  struct channel* channel;
-  channel = malloc(sizeof(struct channel));
+  struct channel* channel = (struct channel*)malloc(sizeof(struct channel));
   channel->id = id;
   channel->edge1 = direction1;
   channel->edge2 = direction2;
@@ -31,16 +27,12 @@ struct channel* new_channel(long id, long direction1, long direction2, long node
   channel->node2 = node2;
   channel->capacity = capacity;
   channel->is_closed = 0;
-//  channel->occupied = 0;
-//  channel->payment_history = NULL;
   return channel;
 }
 
-
 /* one directional edge of a channel */
 struct edge* new_edge(long id, long channel_id, long counter_edge_id, long from_node_id, long to_node_id, uint64_t balance, struct policy policy, uint64_t channel_capacity){
-  struct edge* edge;
-  edge = malloc(sizeof(struct edge));
+  struct edge* edge = (struct edge*)malloc(sizeof(struct edge));
   edge->id = id;
   edge->channel_id = channel_id;
   edge->from_node_id = from_node_id;
@@ -52,22 +44,21 @@ struct edge* new_edge(long id, long channel_id, long counter_edge_id, long from_
   edge->tot_flows = 0;
   edge->group = NULL;
 
-  struct channel_update* channel_update = malloc(sizeof(struct channel_update));
+  struct channel_update* channel_update = (struct channel_update*)malloc(sizeof(struct channel_update));
   channel_update->htlc_maximum_msat = channel_capacity;
   channel_update->edge_id = edge->id;
   channel_update->time = 0;
   edge->channel_updates = push(NULL, channel_update);
   edge->edge_locked_balance_and_durations = NULL;
 
-  /* === added: initialize leave/rejoin related fields === */
-  edge->join_time       = 0;     /* will be set when the edge actually joins a group */
-  edge->flows_at_join   = 0;     /* snapshot of tot_flows taken at join_time */
-  edge->tolerance_tau   = 0.10;  /* default tolerance; may be randomized at network init */
+  /* initialize leave/rejoin related fields */
+  edge->join_time       = 0;     /* set when the edge actually joins a group */
+  edge->flows_at_join   = 0;     /* snapshot of tot_flows at join_time */
+  edge->tolerance_tau   = 0.10;  /* default tolerance */
   edge->last_leave_time = 0;     /* updated when leaving a group */
 
   return edge;
 }
-
 
 /* after generating a network, write it in csv files "nodes.csv" "edges.csv" "channels.csv" */
 void write_network_files(struct network* network){
@@ -83,6 +74,7 @@ void write_network_files(struct network* network){
     exit(-1);
   }
   fprintf(nodes_output_file, "id\n");
+
   channels_output_file = fopen("channels.csv", "w");
   if(channels_output_file==NULL) {
     fprintf(stderr, "ERROR: cannot open file <%s>\n", "channels.csv");
@@ -90,6 +82,7 @@ void write_network_files(struct network* network){
     exit(-1);
   }
   fprintf(channels_output_file, "id,edge1_id,edge2_id,node1_id,node2_id,capacity\n");
+
   edges_output_file = fopen("edges.csv", "w");
   if(edges_output_file==NULL) {
     fprintf(stderr, "ERROR: cannot open file <%s>\n", "edges.csv");
@@ -99,19 +92,25 @@ void write_network_files(struct network* network){
   }
   fprintf(edges_output_file, "id,channel_id,counter_edge_id,from_node_id,to_node_id,balance,fee_base,fee_proportional,min_htlc,timelock\n");
 
-  for(i=0; i<array_len(network->nodes); i++){
+  for(i = 0; i < array_len(network->nodes); i++){
     node = array_get(network->nodes, i);
     fprintf(nodes_output_file, "%ld\n", node->id);
   }
 
-  for(i=0; i<array_len(network->channels); i++){
+  for(i = 0; i < array_len(network->channels); i++){
     channel = array_get(network->channels, i);
-    fprintf(channels_output_file, "%ld,%ld,%ld,%ld,%ld,%ld\n", channel->id, channel->edge1, channel->edge2, channel->node1, channel->node2, channel->capacity);
+    fprintf(channels_output_file, "%ld,%ld,%ld,%ld,%ld,%" PRIu64 "\n",
+            channel->id, channel->edge1, channel->edge2, channel->node1, channel->node2,
+            (uint64_t)channel->capacity);
   }
 
-  for(i=0; i<array_len(network->edges); i++){
+  for(i = 0; i < array_len(network->edges); i++){
     edge = array_get(network->edges, i);
-    fprintf(edges_output_file, "%ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld,%d\n", edge->id, edge->channel_id, edge->counter_edge_id, edge->from_node_id, edge->to_node_id, edge->balance, (edge->policy).fee_base, (edge->policy).fee_proportional, (edge->policy).min_htlc, (edge->policy).timelock);
+    fprintf(edges_output_file, "%ld,%ld,%ld,%ld,%ld,%" PRIu64 ",%ld,%ld,%" PRIu64 ",%d\n",
+            edge->id, edge->channel_id, edge->counter_edge_id, edge->from_node_id, edge->to_node_id,
+            (uint64_t)edge->balance,
+            (long)(edge->policy).fee_base, (long)(edge->policy).fee_proportional,
+            (uint64_t)(edge->policy).min_htlc, (int)(edge->policy).timelock);
   }
 
   fclose(nodes_output_file);
@@ -119,13 +118,12 @@ void write_network_files(struct network* network){
   fclose(channels_output_file);
 }
 
-
 void update_probability_per_node(double *probability_per_node, int *channels_per_node, long n_nodes, long node1_id, long node2_id, long tot_channels){
   long i;
   channels_per_node[node1_id] += 1;
   channels_per_node[node2_id] += 1;
-  for(i=0; i<n_nodes; i++)
-    probability_per_node[i] = ((double)channels_per_node[i])/tot_channels;
+  for(i = 0; i < n_nodes; i++)
+    probability_per_node[i] = ((double)channels_per_node[i]) / tot_channels;
 }
 
 /* generate a channel (connecting node1_id and node2_id) with random values */
@@ -138,30 +136,35 @@ void generate_random_channel(struct channel channel_data, uint64_t mean_channel_
   struct edge* edge1, *edge2;
   struct node* node;
 
-  capacity = fabs(mean_channel_capacity + gsl_ran_ugaussian(random_generator));
-  channel = new_channel(channel_data.id, channel_data.edge1, channel_data.edge2, channel_data.node1, channel_data.node2, capacity*1000);
+  capacity = (uint64_t)fabs(mean_channel_capacity + gsl_ran_ugaussian(random_generator));
+  channel = new_channel(channel_data.id, channel_data.edge1, channel_data.edge2,
+                        channel_data.node1, channel_data.node2, capacity*1000);
 
   fraction_capacity = gsl_rng_uniform(random_generator);
-  edge1_balance = fraction_capacity*((double) capacity);
+  edge1_balance = (uint64_t)(fraction_capacity * ((double)capacity));
   edge2_balance = capacity - edge1_balance;
-  //multiplied by 1000 to convert satoshi to millisatoshi
-  edge1_balance*=1000;
-  edge2_balance*=1000;
+  /* convert satoshi to millisatoshi */
+  edge1_balance *= 1000;
+  edge2_balance *= 1000;
 
   min_htlc_discrete = gsl_ran_discrete_preproc(4, min_htlcP);
+
   edge1_policy.fee_base = gsl_rng_uniform_int(random_generator, MAXFEEBASE - MINFEEBASE) + MINFEEBASE;
-  edge1_policy.fee_proportional = (gsl_rng_uniform_int(random_generator, MAXFEEPROP-MINFEEPROP)+MINFEEPROP);
-  edge1_policy.timelock = gsl_rng_uniform_int(random_generator, MAXTIMELOCK-MINTIMELOCK)+MINTIMELOCK;
+  edge1_policy.fee_proportional = (gsl_rng_uniform_int(random_generator, MAXFEEPROP - MINFEEPROP) + MINFEEPROP);
+  edge1_policy.timelock = gsl_rng_uniform_int(random_generator, MAXTIMELOCK - MINTIMELOCK) + MINTIMELOCK;
   edge1_policy.min_htlc = gsl_pow_int(10, gsl_ran_discrete(random_generator, min_htlc_discrete));
   edge1_policy.min_htlc = edge1_policy.min_htlc == 1 ? 0 : edge1_policy.min_htlc;
+
   edge2_policy.fee_base = gsl_rng_uniform_int(random_generator, MAXFEEBASE - MINFEEBASE) + MINFEEBASE;
-  edge2_policy.fee_proportional = (gsl_rng_uniform_int(random_generator, MAXFEEPROP-MINFEEPROP)+MINFEEPROP);
-  edge2_policy.timelock = gsl_rng_uniform_int(random_generator, MAXTIMELOCK-MINTIMELOCK)+MINTIMELOCK;
+  edge2_policy.fee_proportional = (gsl_rng_uniform_int(random_generator, MAXFEEPROP - MINFEEPROP) + MINFEEPROP);
+  edge2_policy.timelock = gsl_rng_uniform_int(random_generator, MAXTIMELOCK - MINTIMELOCK) + MINTIMELOCK;
   edge2_policy.min_htlc = gsl_pow_int(10, gsl_ran_discrete(random_generator, min_htlc_discrete));
   edge2_policy.min_htlc = edge2_policy.min_htlc == 1 ? 0 : edge2_policy.min_htlc;
 
-  edge1 = new_edge(channel_data.edge1, channel_data.id, channel_data.edge2, channel_data.node1, channel_data.node2, edge1_balance, edge1_policy, channel_data.capacity);
-  edge2 = new_edge(channel_data.edge2, channel_data.id, channel_data.edge1, channel_data.node2, channel_data.node1, edge2_balance, edge2_policy, channel_data.capacity);
+  edge1 = new_edge(channel_data.edge1, channel_data.id, channel_data.edge2,
+                   channel_data.node1, channel_data.node2, edge1_balance, edge1_policy, channel_data.capacity);
+  edge2 = new_edge(channel_data.edge2, channel_data.id, channel_data.edge1,
+                   channel_data.node2, channel_data.node1, edge2_balance, edge2_policy, channel_data.capacity);
 
   network->channels = array_insert(network->channels, channel);
   network->edges = array_insert(network->edges, edge1);
@@ -172,7 +175,6 @@ void generate_random_channel(struct channel channel_data, uint64_t mean_channel_
   node = array_get(network->nodes, channel_data.node2);
   node->open_edges = array_insert(node->open_edges, &(edge2->id));
 }
-
 
 /* generate a random payment-channel network;
    the model of the network is a snapshot of the Lightning Network (files "nodes_ln.csv", "channels_ln.csv");
@@ -220,7 +222,7 @@ struct network* generate_random_network(struct network_params net_params, gsl_rn
     exit(-1);
   }
 
-  channels_per_node = malloc(sizeof(int)*(tot_nodes));
+  channels_per_node = (int*)malloc(sizeof(int)*(tot_nodes));
   for(i = 0; i < tot_nodes; i++){
     channels_per_node[i] = 0;
   }
@@ -242,17 +244,17 @@ struct network* generate_random_network(struct network_params net_params, gsl_rn
     exit(-1);
   }
 
-  probability_per_node = malloc(sizeof(double)*tot_nodes);
-  for(i=0; i<tot_nodes; i++){
+  probability_per_node = (double*)malloc(sizeof(double)*tot_nodes);
+  for(i = 0; i < tot_nodes; i++){
     probability_per_node[i] = ((double)channels_per_node[i])/tot_channels;
   }
 
   /* scale-free algorithm that creates a network starting from an existing network;
-     the probability of connecting nodes is directly proprotional to the number of channels that a node has already open */
-  for(i=0; i<net_params.n_nodes; i++){
+     the probability of connecting nodes is directly proportional to the number of channels that a node has already open */
+  for(i = 0; i < net_params.n_nodes; i++){
     node = new_node(node_id_counter);
     network->nodes = array_insert(network->nodes, node);
-    for(j=0; j<net_params.n_channels; j++){
+    for(j = 0; j < net_params.n_channels; j++){
       connection_probability = gsl_ran_discrete_preproc(node_id_counter, probability_per_node);
       node_to_connect_id = gsl_ran_discrete(random_generator, connection_probability);
       channel.id = channel_id_counter;
@@ -277,7 +279,6 @@ struct network* generate_random_network(struct network_params net_params, gsl_rn
 
   return network;
 }
-
 
 /* generate a payment-channel network from input files */
 struct network* generate_network_from_files(char nodes_filename[256], char channels_filename[256], char edges_filename[256]) {
@@ -325,16 +326,17 @@ struct network* generate_network_from_files(char nodes_filename[256], char chann
 
   fgets(row, 2048, channels_file);
   while(fgets(row, 2048, channels_file)!=NULL) {
-    sscanf(row, "%ld,%ld,%ld,%ld,%ld,%ld", &id, &direction1, &direction2, &node_id1, &node_id2, &capacity);
+    sscanf(row, "%ld,%ld,%ld,%ld,%ld,%" SCNu64, &id, &direction1, &direction2, &node_id1, &node_id2, &capacity);
     channel = new_channel(id, direction1, direction2, node_id1, node_id2, capacity);
     network->channels = array_insert(network->channels, channel);
   }
   fclose(channels_file);
 
-
   fgets(row, 2048, edges_file);
   while(fgets(row, 2048, edges_file)!=NULL) {
-    sscanf(row, "%ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld,%d", &id, &channel_id, &other_direction, &node_id1, &node_id2, &balance, &policy.fee_base, &policy.fee_proportional, &policy.min_htlc, &policy.timelock);
+    sscanf(row, "%ld,%ld,%ld,%ld,%ld,%" SCNu64 ",%ld,%ld,%" SCNu64 ",%d",
+           &id, &channel_id, &other_direction, &node_id1, &node_id2, &balance,
+           &policy.fee_base, &policy.fee_proportional, &policy.min_htlc, &policy.timelock);
     channel = array_get(network->channels, channel_id);
     edge = new_edge(id, channel_id, other_direction, node_id1, node_id2, balance, policy, channel->capacity);
     network->edges = array_insert(network->edges, edge);
@@ -345,7 +347,6 @@ struct network* generate_network_from_files(char nodes_filename[256], char chann
 
   return network;
 }
-
 
 struct network* initialize_network(struct network_params net_params, gsl_rng* random_generator) {
   struct network* network;
@@ -359,25 +360,25 @@ struct network* initialize_network(struct network_params net_params, gsl_rng* ra
   else
     network = generate_random_network(net_params, random_generator);
 
-  faulty_prob[0] = 1-net_params.faulty_node_prob;
+  faulty_prob[0] = 1 - net_params.faulty_node_prob;
   faulty_prob[1] = net_params.faulty_node_prob;
   network->faulty_node_prob = gsl_ran_discrete_preproc(2, faulty_prob);
 
   n_nodes = array_len(network->nodes);
-  for(i=0; i<n_nodes; i++){
+  for(i = 0; i < n_nodes; i++){
     node = array_get(network->nodes, i);
-    node->results = (struct element**) malloc(n_nodes*sizeof(struct element*));
-    for(j=0; j<n_nodes; j++)
+    node->results = (struct element**) malloc(n_nodes * sizeof(struct element*));
+    for(j = 0; j < n_nodes; j++)
       node->results[j] = NULL;
   }
 
   network->groups = array_initialize(1000);
 
-  return  network;
+  return network;
 }
 
 /* open a new channel during the simulation */
-/* currenlty NOT USED */
+/* currently NOT USED */
 void open_channel(struct network* network, gsl_rng* random_generator){
   struct channel channel;
   channel.id = array_len(network->channels);
@@ -391,64 +392,66 @@ void open_channel(struct network* network, gsl_rng* random_generator){
 }
 
 int update_group(struct group* group, struct network_params net_params, uint64_t current_time){
-    int close_flg = 0;
+  int close_flg = 0;
 
-    // update group cap
-    uint64_t min = UINT64_MAX;
-    uint64_t max = 0;
-    for (int i = 0; i < array_len(group->edges); i++) {
-        struct edge* edge = array_get(group->edges, i);
-        if(edge->balance < min) min = edge->balance;
-        if(edge->balance > max) max = edge->balance;
+  /* recompute min/max among members; check join conditions */
+  uint64_t min = UINT64_MAX;
+  uint64_t max = 0;
+  for (long i = 0; i < array_len(group->edges); i++) {
+    struct edge* edge = array_get(group->edges, i);
+    if (edge->balance < min) min = edge->balance;
+    if (edge->balance > max) max = edge->balance;
 
-        if(!can_join_group(group, edge)){
-            close_flg = 1;
-        }
+    if (!can_join_group(group, edge)) {
+      close_flg = 1;
     }
+  }
 
-    // update group capacity
-    group->max_cap = max;
-    group->min_cap = min;
-    if(net_params.group_cap_update) {
-        group->group_cap = min;
-    }else{
-        group->group_cap = group->min_cap_limit;
-    }
+  /* update group capacity */
+  group->max_cap = max;
+  group->min_cap = min;
+  if (net_params.group_cap_update) {
+    group->group_cap = min;
+  } else {
+    group->group_cap = group->min_cap_limit;
+  }
 
-    /*ここで公開最小容量の更新ログを出す(min/maxを算出済みの直後がわかりやすい)*/
-  if (net_params.enable_group_event_csv && csv_group_events) {
-       ge_update_group((uint64_t)current_time, group->id,
-                       group->group_cap, group->min_cap, group->max_cap,
-                       group->seed_edge_id, group->attempt_id);
-     }
+  /* === LOGGING: 出力は「確定後（group->id >= 0）」のみ ===
+     ※ 構築途中（未確定の間）は group->id を -1 にしておき、
+        ここでは一切 ge_update_group を呼ばない。 */
+  if (net_params.enable_group_event_csv && csv_group_events && group->id >= 0) {
+    ge_update_group((uint64_t)current_time, group->id,
+                    group->group_cap, group->min_cap, group->max_cap,
+                    group->seed_edge_id, group->attempt_id);
+  }
 
-    //record group_update history
-    struct group_update* group_update = malloc(sizeof(struct group_update));
-    group_update->group_cap = group->group_cap;
-    group_update->time = current_time;
-    group_update->edge_balances = malloc(sizeof(uint64_t) * array_len(group->edges));
-    for (int i = 0; i < array_len(group->edges); i++) {
-        struct edge* edge = array_get(group->edges, i);
-        group_update->edge_balances[i] = edge->balance;
-    }
-    group->history = push(group->history, group_update);
+  /* record group_update history */
+  struct group_update* group_update = (struct group_update*)malloc(sizeof(struct group_update));
+  group_update->group_cap = group->group_cap;
+  group_update->time = current_time;
+  long m = array_len(group->edges);
+  group_update->edge_balances = (uint64_t*)malloc(sizeof(uint64_t) * (m > 0 ? m : 1));
+  for (long i = 0; i < m; i++) {
+    struct edge* edge = array_get(group->edges, i);
+    group_update->edge_balances[i] = edge->balance;
+  }
+  group->history = push(group->history, group_update);
 
-    return close_flg;
+  return close_flg;
 }
 
 long get_edge_balance(struct edge* e){
-    return e->balance;
+    return (long)e->balance;
 }
 
-/* === added: safely remove an edge from a group's member list === */
-/* Rebuilds the array without 'e' to avoid in-place mutation issues during iteration. */
+/* safely remove an edge from a group's member list */
 void remove_edge_from_group(struct group* g, struct edge* e){
     if(g == NULL || g->edges == NULL) return;
     long n = array_len(g->edges);
     struct array* rebuilt = array_initialize(n > 0 ? n : 1);
     for(long i = 0; i < n; i++){
       struct edge* cur = array_get(g->edges, i);
-      /* === CHANGE: ポインタ比較 → ID比較 === */
+      /* compare by ID to avoid pointer aliasing issues */
       if(cur && e && cur->id == e->id) continue;
       rebuilt = array_insert(rebuilt, cur);
     }
@@ -457,7 +460,7 @@ void remove_edge_from_group(struct group* g, struct edge* e){
 }
 
 struct edge_snapshot* take_edge_snapshot(struct edge* e, uint64_t sent_amt, short is_in_group, uint64_t group_cap) {
-    struct edge_snapshot* snapshot = malloc(sizeof(struct edge_snapshot));
+    struct edge_snapshot* snapshot = (struct edge_snapshot*)malloc(sizeof(struct edge_snapshot));
     snapshot->id = e->id;
     snapshot->balance = e->balance;
     snapshot->sent_amt = sent_amt;
@@ -467,7 +470,7 @@ struct edge_snapshot* take_edge_snapshot(struct edge* e, uint64_t sent_amt, shor
         struct channel_update* cu = e->channel_updates->data;
         snapshot->does_channel_update_exist = 1;
         snapshot->last_channle_update_value = cu->htlc_maximum_msat;
-    }else {
+    } else {
         snapshot->does_channel_update_exist = 0;
         snapshot->last_channle_update_value = 0;
     }
@@ -475,31 +478,48 @@ struct edge_snapshot* take_edge_snapshot(struct edge* e, uint64_t sent_amt, shor
 }
 
 void free_network(struct network* network){
-    for(uint64_t i = 0; array_len(network->nodes); i++){
+    if (!network) return;
+
+    /* nodes */
+    for(uint64_t i = 0; i < (uint64_t)array_len(network->nodes); i++){
         struct node* n = array_get(network->nodes, i);
-        if(n == NULL) continue;
+        if(!n) continue;
         array_free(n->open_edges);
         for(struct element* iterator = (struct element *) n->results; iterator != NULL; iterator = iterator->next){
             list_free(iterator->data);
         }
         free(n);
     }
-    for(uint64_t i = 0; array_len(network->edges); i++){
+
+    /* edges */
+    for(uint64_t i = 0; i < (uint64_t)array_len(network->edges); i++){
         struct edge* e = array_get(network->edges, i);
-        if(e == NULL) continue;
+        if(!e) continue;
         list_free(e->channel_updates);
         list_free(e->edge_locked_balance_and_durations);
         free(e);
     }
-    for(uint64_t i = 0; array_len(network->channels); i++){
+
+    /* channels */
+    for(uint64_t i = 0; i < (uint64_t)array_len(network->channels); i++){
         struct channel* c = array_get(network->channels, i);
-        if(c == NULL) continue;
+        if(!c) continue;
         free(c);
     }
-    for(uint64_t i = 0; array_len(network->groups); i++){
+
+    /* groups */
+    for(uint64_t i = 0; i < (uint64_t)array_len(network->groups); i++){
         struct group* g = array_get(network->groups, i);
-        if(g == NULL) continue;
+        if(!g) continue;
         list_free(g->history);
         free(g);
     }
+
+    /* arrays themselves */
+    array_free(network->nodes);
+    array_free(network->edges);
+    array_free(network->channels);
+    array_free(network->groups);
+
+    free(network);
 }
