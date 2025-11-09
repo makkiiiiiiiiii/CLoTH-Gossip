@@ -154,6 +154,7 @@ void free_network(struct network* network);
 int  update_group(struct group* group, struct network_params net_params, uint64_t current_time);
 long get_edge_balance(struct edge* e);
 void remove_edge_from_group(struct group* g, struct edge* e);
+void group_close_once(struct simulation* sim,struct group* g,const char* reason);
 
 /* stats helpers */
 struct edge_snapshot* take_edge_snapshot(struct edge* e, uint64_t sent_amt, short is_in_group, uint64_t group_cap);

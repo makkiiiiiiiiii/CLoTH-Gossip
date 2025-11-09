@@ -696,23 +696,7 @@ struct element* request_group_update(struct event* event, struct simulation* sim
             int close_flg = update_group(group, net_params, simulation->current_time);
             if (close_flg) {
                 // メンバーを外す前に "id-id-..." を作る
-                char members_buf[8192]; members_buf[0] = '\0';
-                for (long j = 0; j < array_len(group->edges); j++) {
-                    struct edge* ee = array_get(group->edges, j);
-                    char tmp[64];
-                    snprintf(tmp, sizeof(tmp), "%s%ld", (j==0 ? "" : "-"), ee->id);
-                    strncat(members_buf, tmp, sizeof(members_buf) - strlen(members_buf) - 1);
-                }
-                if (net_params.enable_group_event_csv && csv_group_events) {
-                    ge_close((uint64_t)simulation->current_time,
-                             group->id,
-                             "update_violation",
-                             members_buf,
-                             group->seed_edge_id,
-                             group->attempt_id);
-                }
-
-                group->is_closed = simulation->current_time;
+                group_close_once(simulation, group, "update_violation");
 
                 /* add all edges to queue and clear membership */
                 for(long j = 0; j < array_len(group->edges); j++){
@@ -810,14 +794,19 @@ struct element* request_group_update(struct event* event, struct simulation* sim
             struct group* group = counter_edge->group;
             int close_flg = update_group(group, net_params, simulation->current_time);
 
-            if(close_flg){
-                group->is_closed = simulation->current_time;
+            if (close_flg) {
+                if (group->is_closed == 0) {
+                    group_close_once(simulation, group, "update_violation");
+                }
 
-                for(long j = 0; j < array_len(group->edges); j++){
+                for (long j = 0; j < array_len(group->edges); j++) {
                     struct edge* edge_in_group = array_get(group->edges, j);
-                    edge_in_group->group = NULL;
-                    edge_in_group->last_leave_time = simulation->current_time;
-                    group_add_queue = list_insert_sorted_position(group_add_queue, edge_in_group, (long (*)(void *)) get_edge_balance);
+                    if (edge_in_group) {
+                        edge_in_group->group = NULL;
+                        edge_in_group->last_leave_time = simulation->current_time;
+                        group_add_queue = list_insert_sorted_position(
+                            group_add_queue, edge_in_group, (long (*)(void *)) get_edge_balance);
+                    }
                 }
 
                 uint64_t next_event_time = simulation->current_time;
@@ -984,7 +973,10 @@ struct element* construct_groups(struct simulation* simulation,
                 snprintf(tmp, sizeof(tmp), "%s%ld", (k == 0 ? "" : "-"), me->id);
                 strncat(members_buf, tmp, sizeof(members_buf) - strlen(members_buf) - 1);
             }
-
+            group->seed_edge_id = requesting_edge->id;
+            group->attempt_id   = attempt_id;
+            group->is_closed = 0;
+            network->groups = array_insert(network->groups, group);
             if (net_params.enable_group_event_csv && csv_group_events) {
                 ge_construct_commit(
                     (uint64_t)simulation->current_time,
@@ -1039,6 +1031,14 @@ struct element* construct_groups(struct simulation* simulation,
                                    (int)net_params.group_size,     // needed
                                    (uint64_t)attempt_id);
                 logged_abort = 1;
+            }
+            if (group->id >= 0 && group->is_closed == 0) {
+                group_close_once(simulation, group, "cleanup_without_close");
+            }
+
+            for (long j = 0; j < array_len(group->edges); j++) {
+                struct edge* e = array_get(group->edges, j);
+                if (e && e->group == group) e->group = NULL;
             }
 
             array_free(group->edges);

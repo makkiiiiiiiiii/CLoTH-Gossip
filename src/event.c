@@ -73,14 +73,14 @@ void ge_construct_begin(uint64_t time, long seed_edge_id, uint64_t attempt_id) {
     /* construct_begin,time,-,-,seed,seed_id,attempt_id,-,-,-,-,-,-,-,- */
     fprintf(csv_group_events,
         "construct_begin,%" PRIu64 ",-,-,seed,%ld,%" PRIu64 ",-,-,-,-,-,-,-,-\n",
-        (unsigned long long)time, seed_edge_id, (unsigned long long)attempt_id);
+        (uint64_t)time, seed_edge_id, (uint64_t)attempt_id);
 }
 
 void ge_construct_abort(uint64_t time, long seed_edge_id, int size, int needed, uint64_t attempt_id) {
     if (!csv_group_events) return;
     fprintf(csv_group_events,
         "construct_abort,%" PRIu64 ",-,-,seed,%ld,%" PRIu64 ",shortage,%d,%d,-,-,-,-,-\n",
-        (unsigned long long)time, seed_edge_id, (unsigned long long)attempt_id, size, needed);
+        (uint64_t)time, seed_edge_id, (uint64_t)attempt_id, size, needed);
 }
 
 void ge_construct_commit(uint64_t time, long group_id,
@@ -90,10 +90,10 @@ void ge_construct_commit(uint64_t time, long group_id,
     if (!csv_group_events) return;
     fprintf(csv_group_events,
         "construct_commit,%" PRIu64 ",%ld,-,group,%ld,%" PRIu64 ",commit,-,-,%s,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",-\n",
-        (unsigned long long)time, group_id,
-        seed_edge_id, (unsigned long long)attempt_id,
+        (uint64_t)time, group_id,
+        seed_edge_id, (uint64_t)attempt_id,
         dash_if_empty(members_dash_joined),
-        (unsigned long long)group_cap, (unsigned long long)min_cap, (unsigned long long)max_cap);
+        (uint64_t)group_cap, (uint64_t)min_cap, (uint64_t)max_cap);
 }
 
 void ge_join(uint64_t time, long group_id, long edge_id,
@@ -103,9 +103,9 @@ void ge_join(uint64_t time, long group_id, long edge_id,
     if (!csv_group_events) return;
     fprintf(csv_group_events,
         "join,%" PRIu64 ",%ld,%ld,join,%ld,%" PRIu64 ",%s,-,-,-,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",-\n",
-        (unsigned long long)time, group_id, edge_id,
-        seed_edge_id, (unsigned long long)attempt_id, dash_if_empty(reason),
-        (unsigned long long)group_cap, (unsigned long long)min_cap, (unsigned long long)max_cap);
+        (uint64_t)time, group_id, edge_id,
+        seed_edge_id, (uint64_t)attempt_id, dash_if_empty(reason),
+        (uint64_t)group_cap, (uint64_t)min_cap, (uint64_t)max_cap);
 }
 
 void ge_leave(uint64_t time, long group_id, long edge_id,
@@ -115,9 +115,9 @@ void ge_leave(uint64_t time, long group_id, long edge_id,
     if (!csv_group_events) return;
     fprintf(csv_group_events,
         "leave,%" PRIu64 ",%ld,%ld,leave,%ld,%" PRIu64 ",%s,-,-,-,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",-\n",
-        (unsigned long long)time, group_id, edge_id,
-        seed_edge_id, (unsigned long long)attempt_id, dash_if_empty(reason),
-        (unsigned long long)group_cap, (unsigned long long)min_cap, (unsigned long long)max_cap);
+        (uint64_t)time, group_id, edge_id,
+        seed_edge_id, (uint64_t)attempt_id, dash_if_empty(reason),
+        (uint64_t)group_cap, (uint64_t)min_cap, (uint64_t)max_cap);
 }
 
 void ge_update_group(uint64_t time, long group_id,
@@ -128,8 +128,8 @@ void ge_update_group(uint64_t time, long group_id,
     const char* gid = gid_or_dash(group_id, gidbuf, sizeof(gidbuf));
     fprintf(csv_group_events,
         "update_group,%" PRIu64 ",%s,-,group,%ld,%" PRIu64 ",update,-,-,-,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",-\n",
-        (unsigned long long)time, gid, seed_edge_id, (unsigned long long)attempt_id,
-        (unsigned long long)group_cap, (unsigned long long)min_cap, (unsigned long long)max_cap);
+        (uint64_t)time, gid, seed_edge_id, (uint64_t)attempt_id,
+        (uint64_t)group_cap, (uint64_t)min_cap, (uint64_t)max_cap);
 }
 
 void ge_close(uint64_t time, long group_id, const char* reason,
@@ -138,7 +138,7 @@ void ge_close(uint64_t time, long group_id, const char* reason,
     if (!csv_group_events) return;
     fprintf(csv_group_events,
         "close,%" PRIu64 ",%ld,-,group,%ld,%" PRIu64 ",%s,-,-,%s,-,-,-,-\n",
-        (unsigned long long)time, group_id,
-        seed_edge_id, (unsigned long long)attempt_id, dash_if_empty(reason),
+        (uint64_t)time, group_id,
+        seed_edge_id, (uint64_t)attempt_id, dash_if_empty(reason),
         dash_if_empty(members_dash_joined));
 }
