@@ -1,52 +1,50 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# どこから実行しても同じ動作にするためのパス解決
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 BUILD_DIR="$PROJECT_ROOT/cmake-build-debug"
 OUTDIR="$BUILD_DIR/result"
 CSV="$OUTDIR/group_events.csv"
 
-# --- 初回だけ configure。既に CMakeCache.txt があれば再構成しない ---
+# ★ 再構成は基本しない（上書き事故を防ぐ）。
 if [[ ! -f "$BUILD_DIR/CMakeCache.txt" ]]; then
-  cmake -S "$PROJECT_ROOT" -B "$BUILD_DIR" >/dev/null
-fi
-
-# --- ビルドのみ（再構成での上書きリスクを避ける） ---
-cmake --build "$BUILD_DIR" -j >/dev/null
-
-# --- toy1 を強制適用：cloth_input.txt を上書き修正 ---
-# 1) toy1 CSV をビルドディレクトリに揃える（参照先を単純化）
-cp -f "$PROJECT_ROOT/nodes_ln_toy1.csv"    "$BUILD_DIR/" 2>/dev/null || true
-cp -f "$PROJECT_ROOT/channels_ln_toy1.csv" "$BUILD_DIR/" 2>/dev/null || true
-cp -f "$PROJECT_ROOT/edges_ln_toy1.csv"    "$BUILD_DIR/" 2>/dev/null || true
-
-# 2) cloth_input.txt の参照を toy1 名に固定（ビルドDIR基準）
-if [[ ! -f "$BUILD_DIR/cloth_input.txt" ]]; then
-  echo "ERROR: $BUILD_DIR/cloth_input.txt not found." >&2
+  echo "ERROR: $BUILD_DIR が未構成です。まず一度だけ以下を実行してください:"
+  echo "  cmake -S \"$PROJECT_ROOT\" -B \"$BUILD_DIR\""
   exit 2
 fi
 
-# sed で行置換（存在する行だけを書き換え。無ければ追記）
-sed -i -E 's|^nodes_filename=.*$|nodes_filename=nodes_ln_toy1.csv|'       "$BUILD_DIR/cloth_input.txt"
-sed -i -E 's|^channels_filename=.*$|channels_filename=channels_ln_toy1.csv|' "$BUILD_DIR/cloth_input.txt"
-sed -i -E 's|^edges_filename=.*$|edges_filename=edges_ln_toy1.csv|'       "$BUILD_DIR/cloth_input.txt"
+# ビルドのみ（再構成しない）
+cmake --build "$BUILD_DIR" -j >/dev/null
 
-# 念のため表示
-grep -E '^(nodes_filename|channels_filename|edges_filename)=' "$BUILD_DIR/cloth_input.txt" || true
+# 実行は必ずビルドディレクトリをカレントにし、cloth_input.txt はそこで見つかった内容をそのまま使う
+pushd "$BUILD_DIR" >/dev/null
 
-# --- 実行（常に cmake-build-debug をカレント） ---
+# 必須ファイルチェック：ここに書かれた内容で実行する（絶対に書き換えない）
+if [[ ! -f cloth_input.txt ]]; then
+  echo "ERROR: $BUILD_DIR/cloth_input.txt not found." >&2
+  popd >/dev/null
+  exit 3
+fi
+
+echo "===== EFFECTIVE cloth_input.txt (keys) ====="
+grep -E '^(nodes_filename|channels_filename|edges_filename|generate_network_from_file|generate_payments_from_file|payments_filename|group_size|group_limit_rate|group_min_cap_ratio|group_max_cap_ratio)=' cloth_input.txt || true
+echo "==========================================="
+
+# 出力先を固定。古いCSVは消す
 mkdir -p "$OUTDIR"
 rm -f "$CSV"
 
-pushd "$BUILD_DIR" >/dev/null
+# 実行（cloth_input.txt の記述どおりに動く）
 ./CLoTH_Gossip "$OUTDIR" >/dev/null
+
 popd >/dev/null
 
-# --- 判定（固定の CSV を毎回参照） ---
+# 出力確認と集計（CSV/TSV両対応）
 if [[ ! -f "$CSV" ]]; then
   echo "ERROR: not found: $CSV" >&2
-  exit 3
+  exit 4
 fi
 
 awk -F '[,\t]' '
