@@ -34,6 +34,13 @@ pthread_mutex_t data_mutex;
 pthread_mutex_t jobs_mutex;
 struct array** paths;
 struct element* jobs=NULL;
+static enum payment_error_type to_payment_error(enum pathfind_error e) {
+  switch (e) {
+    case NOLOCALBALANCE: return NOBALANCE;     // 送信元残高不足
+    case NOPATH:         return OFFLINENODE;   // 経路なし等に相当
+    default:             return NOERROR;       // 正常 or 未分類
+  }
+}
 
 
 /* intialize the data structures of dijkstra and the jobs to be executed by the dijkstra threads */
@@ -61,28 +68,41 @@ void initialize_dijkstra(long n_nodes, long n_edges, struct array* payments) {
 }
 
 /* a dijkstra thread finds a path for a payment by calling dijkstra */
-void* dijkstra_thread(void*arg) {
-  struct payment * payment;
-  struct array* hops;
-  void *data;
-  long payment_id;
-  struct thread_args *thread_args;
-  enum pathfind_error error;
-  thread_args = (struct thread_args*) arg;
+void* dijkstra_thread(void* arg) {
+  struct thread_args *thread_args = (struct thread_args*) arg;
+  enum pathfind_error pf_err;
 
-  while(1) {
-    if(jobs == NULL) return NULL;
+  while (1) {
+    void *data = NULL;
+
     pthread_mutex_lock(&jobs_mutex);
+    if (jobs == NULL) { pthread_mutex_unlock(&jobs_mutex); break; }
     jobs = pop(jobs, &data);
-    payment_id =  *((long*)data);
     pthread_mutex_unlock(&jobs_mutex);
+    if (data == NULL) break;
+
+    long payment_id = *((long*)data);
+
     pthread_mutex_lock(&data_mutex);
-    payment = array_get(thread_args->payments, payment_id);
+    struct payment *payment = array_get(thread_args->payments, payment_id);
     pthread_mutex_unlock(&data_mutex);
-    hops = dijkstra(payment->sender, payment->receiver, payment->amount, thread_args->network, thread_args->current_time, thread_args->data_index, &error, thread_args->routing_method, NULL, payment->max_fee_limit);
+
+    struct array* hops = dijkstra(
+        payment->sender,
+        payment->receiver,
+        payment->amount,
+        thread_args->network,
+        thread_args->current_time,
+        thread_args->data_index,
+        &pf_err,                         // ← ここだけ名前変更
+        thread_args->routing_method,
+        NULL,
+        payment->max_fee_limit
+    );
+
+    payment->error.type = to_payment_error(pf_err);
     paths[payment->id] = hops;
   }
-
   return NULL;
 }
 
@@ -568,7 +588,7 @@ struct array* dijkstra(long source, long target, uint64_t amount, struct network
       *error = NOPATH;
       return NULL;
     }
-    hop = malloc(sizeof(struct path_hop));
+    struct path_hop* hop = malloc(sizeof(struct path_hop));
     hop->sender = curr;
     hop->edge = distance[p][curr].next_edge;
     edge = array_get(network->edges, distance[p][curr].next_edge);
