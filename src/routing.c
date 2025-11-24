@@ -94,7 +94,7 @@ void* dijkstra_thread(void* arg) {
         thread_args->network,
         thread_args->current_time,
         thread_args->data_index,
-        &pf_err,                         // ← ここだけ名前変更
+        &pf_err,
         thread_args->routing_method,
         NULL,
         payment->max_fee_limit
