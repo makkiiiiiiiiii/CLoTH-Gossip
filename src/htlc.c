@@ -83,6 +83,19 @@ struct route_hop *get_route_hop(long node_id, struct array *route_hops, int is_s
   return array_get(route_hops, index);
 }
 
+/* === helper: count usage when this edge is the group's min-cap === */
+/* 呼び出しタイミング: balance を減らす直前 */
+static inline void maybe_count_min_cap_use(struct edge* e) {
+    if (e == NULL) return;
+    if (e->group == NULL) return;
+
+    struct group* g = e->group;
+
+    /* 公開されている最小容量として使われたかどうかを判定 */
+    if (e->balance == g->group_cap) {
+        e->min_cap_use_count += 1;
+    }
+}
 
 /* FUNCTIONS MANAGING NODE PAIR RESULTS */
 
@@ -368,23 +381,26 @@ void send_payment(struct event* event, struct simulation* simulation, struct net
     return;
   }
 
-  // fail no balance
-  if(first_route_hop->amount_to_forward > next_edge->balance) {
-    payment->error.type = NOBALANCE;
-    payment->error.hop = first_route_hop;
-    payment->no_balance_count += 1;
-    next_event_time = simulation->current_time;
-    next_event = new_event(next_event_time, RECEIVEFAIL, event->node_id, event->payment);
-    simulation->events = heap_insert(simulation->events, next_event, compare_event);
-    return;
-  }
+    // fail no balance
+    if(first_route_hop->amount_to_forward > next_edge->balance) {
+        payment->error.type = NOBALANCE;
+        payment->error.hop = first_route_hop;
+        payment->no_balance_count += 1;
+        next_event_time = simulation->current_time;
+        next_event = new_event(next_event_time, RECEIVEFAIL, event->node_id, event->payment);
+        simulation->events = heap_insert(simulation->events, next_event, compare_event);
+        return;
+    }
 
-  // update balance
-  uint64_t prev_balance = next_edge->balance;
-  (void)prev_balance; /* silence unused warning */
-  next_edge->balance -= first_route_hop->amount_to_forward;
+    /* このエッジが min-cap として使われたなら 1 カウント */
+    maybe_count_min_cap_use(next_edge);
 
-  next_edge->tot_flows += 1;
+    // update balance
+    uint64_t prev_balance = next_edge->balance;
+    (void)prev_balance; /* silence unused warning */
+    next_edge->balance -= first_route_hop->amount_to_forward;
+
+    next_edge->tot_flows += 1;
 
   // success sending
   event_type = first_route_hop->to_node_id == payment->receiver ? RECEIVEPAYMENT : FORWARDPAYMENT;
@@ -450,7 +466,8 @@ void forward_payment(struct event* event, struct simulation* simulation, struct 
     simulation->events = heap_insert(simulation->events, next_event, compare_event);
     return;
   }
-
+  /* このエッジが min-cap として使われたなら 1 カウント */
+  maybe_count_min_cap_use(next_edge);
   // update balance
   uint64_t prev_balance = next_edge->balance;
   (void)prev_balance;
@@ -698,7 +715,6 @@ struct element* request_group_update(struct event* event, struct simulation* sim
     /* parameters for leave decision (MVP defaults) */
     const uint64_t cooldown_ms = (uint64_t)net_params.cooldown_hops
                            * (uint64_t)net_params.average_payment_forward_interval;
-    const uint32_t K_used = (uint32_t)net_params.k_used_on_min_edge;
     const uint32_t max_leaves_per_group_tick = (uint32_t)net_params.max_leaves_per_group_tick;
 
     for(long i = 0; i < array_len(event->payment->route->route_hops); i++){
@@ -754,13 +770,9 @@ struct element* request_group_update(struct event* event, struct simulation* sim
                         if(UL < 0.0) UL = 0.0;
                         if(UL > 1.0) UL = 1.0;
                     }
-                    int is_min_edge = (e->balance == group->group_cap);
-                    uint64_t used_since_join = (e->tot_flows >= e->flows_at_join) ? (e->tot_flows - e->flows_at_join) : 0;
-
                     int divergence = (UL >= e->tolerance_tau);
-                    int overuse    = (is_min_edge && (used_since_join >= K_used));
 
-                    if(divergence || overuse){
+                    if(divergence){
                         leave_candidates = array_insert(leave_candidates, e);
                     }
                 }
@@ -860,13 +872,10 @@ struct element* request_group_update(struct event* event, struct simulation* sim
                         if(UL < 0.0) UL = 0.0;
                         if(UL > 1.0) UL = 1.0;
                     }
-                    int is_min_edge = (e->balance == group->min_cap);
-                    uint64_t used_since_join = (e->tot_flows >= e->flows_at_join) ? (e->tot_flows - e->flows_at_join) : 0;
 
                     int divergence = (UL >= e->tolerance_tau);
-                    int overuse    = (is_min_edge && (used_since_join >= K_used));
 
-                    if(divergence || overuse){
+                    if(divergence){
                         leave_candidates = array_insert(leave_candidates, e);
                     }
                 }

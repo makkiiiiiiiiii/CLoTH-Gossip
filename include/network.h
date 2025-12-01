@@ -65,6 +65,9 @@ struct edge {
   uint64_t join_time;         /* time when (re)joined the current group */
   uint64_t flows_at_join;     /* snapshot of tot_flows at join */
   uint64_t last_leave_time;   /* last time this edge left a group */
+
+  /* === stats: how many times used as group min capacity === */
+  uint64_t min_cap_use_count;
 };
 
 struct edge_locked_balance_and_duration{

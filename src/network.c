@@ -31,7 +31,10 @@ struct channel* new_channel(long id, long direction1, long direction2, long node
 }
 
 /* one directional edge of a channel */
-struct edge* new_edge(long id, long channel_id, long counter_edge_id, long from_node_id, long to_node_id, uint64_t balance, struct policy policy, uint64_t channel_capacity){
+struct edge* new_edge(long id, long channel_id, long counter_edge_id,
+                      long from_node_id, long to_node_id,
+                      uint64_t balance, struct policy policy,
+                      uint64_t channel_capacity){
   struct edge* edge = (struct edge*)malloc(sizeof(struct edge));
   edge->id = id;
   edge->channel_id = channel_id;
@@ -56,6 +59,9 @@ struct edge* new_edge(long id, long channel_id, long counter_edge_id, long from_
   edge->flows_at_join   = 0;     /* snapshot of tot_flows at join_time */
   edge->tolerance_tau   = 0.10;  /* default tolerance */
   edge->last_leave_time = 0;     /* updated when leaving a group */
+
+  /* initialize min-cap usage counter */
+  edge->min_cap_use_count = 0;
 
   return edge;
 }
