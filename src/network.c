@@ -400,20 +400,58 @@ void open_channel(struct network* network, gsl_rng* random_generator){
 int update_group(struct group* group, struct network_params net_params, uint64_t current_time){
   int close_flg = 0;
 
-  /* recompute min/max among members; check join conditions */
+  long m = array_len(group->edges);
+
+  /* min/max 再計算 */
   uint64_t min = UINT64_MAX;
   uint64_t max = 0;
-  for (long i = 0; i < array_len(group->edges); i++) {
-    struct edge* edge = array_get(group->edges, i);
-    if (edge->balance < min) min = edge->balance;
-    if (edge->balance > max) max = edge->balance;
 
-    if (!can_join_group(group, edge)) {
-      close_flg = 1;
+  /* レンジ逸脱の観測（解散には使わない） */
+  long rv_lo = 0;  /* balance < min_cap_limit */
+  long rv_hi = 0;  /* balance > max_cap_limit */
+
+  /* 1) min/max とレンジ逸脱数のカウント */
+  for (long i = 0; i < m; i++) {
+    struct edge* e = array_get(group->edges, i);
+    if (!e) { close_flg = 1; continue; }
+
+    if (e->balance < min) min = e->balance;
+    if (e->balance > max) max = e->balance;
+
+    if (e->balance < group->min_cap_limit) rv_lo++;
+    if (e->balance > group->max_cap_limit) rv_hi++;
+  }
+
+  /* 異常系（空など） */
+  if (min == UINT64_MAX) {
+    min = 0;
+    max = 0;
+    close_flg = 1;
+  }
+
+  /* 2) グループ内の構造整合性（重複・ノード共有）だけは close 扱い */
+  for (long i = 0; i < m; i++) {
+    struct edge* a = array_get(group->edges, i);
+    if (!a) continue;
+
+    for (long j = i + 1; j < m; j++) {
+      struct edge* b = array_get(group->edges, j);
+      if (!b) continue;
+
+      if (a->id == b->id) {
+        close_flg = 1; /* 重複は構造破綻 */
+      }
+
+      if (a->to_node_id == b->to_node_id ||
+          a->to_node_id == b->from_node_id ||
+          a->from_node_id == b->to_node_id ||
+          a->from_node_id == b->from_node_id) {
+        close_flg = 1; /* ノード共有も構造破綻 */
+      }
     }
   }
 
-  /* update group capacity */
+  /* group_cap 更新 */
   group->max_cap = max;
   group->min_cap = min;
   if (net_params.group_cap_update) {
@@ -422,24 +460,26 @@ int update_group(struct group* group, struct network_params net_params, uint64_t
     group->group_cap = group->min_cap_limit;
   }
 
-  /* === LOGGING: 出力は「確定後（group->id >= 0）」のみ ===
-     ※ 構築途中（未確定の間）は group->id を -1 にしておき、
-        ここでは一切 ge_update_group を呼ばない。 */
+  /* update_group ログ（レンジ逸脱は reason に記録するだけ。close はしない） */
   if (net_params.enable_group_event_csv && csv_group_events && group->id >= 0) {
+    char reason_buf[128];
+    snprintf(reason_buf, sizeof(reason_buf),
+             "update;rv=%ld;lo=%ld;hi=%ld", (rv_lo + rv_hi), rv_lo, rv_hi);
+
     ge_update_group((uint64_t)current_time, group->id,
                     group->group_cap, group->min_cap, group->max_cap,
-                    group->seed_edge_id, group->attempt_id);
+                    group->seed_edge_id, group->attempt_id,
+                    reason_buf);
   }
 
-  /* record group_update history */
+  /* history は現状のまま */
   struct group_update* group_update = (struct group_update*)malloc(sizeof(struct group_update));
   group_update->group_cap = group->group_cap;
   group_update->time = current_time;
-  long m = array_len(group->edges);
   group_update->edge_balances = (uint64_t*)malloc(sizeof(uint64_t) * (m > 0 ? m : 1));
   for (long i = 0; i < m; i++) {
-    struct edge* edge = array_get(group->edges, i);
-    group_update->edge_balances[i] = edge->balance;
+    struct edge* e = array_get(group->edges, i);
+    group_update->edge_balances[i] = e ? e->balance : 0;
   }
   group->history = push(group->history, group_update);
 

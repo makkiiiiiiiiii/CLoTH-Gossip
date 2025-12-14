@@ -122,13 +122,15 @@ void ge_leave(uint64_t time, long group_id, long edge_id,
 
 void ge_update_group(uint64_t time, long group_id,
                      uint64_t group_cap, uint64_t min_cap, uint64_t max_cap,
-                     long seed_edge_id, uint64_t attempt_id) {
+                     long seed_edge_id, uint64_t attempt_id,
+                     const char* reason) {
     if (!csv_group_events) return;
     char gidbuf[32];
     const char* gid = gid_or_dash(group_id, gidbuf, sizeof(gidbuf));
     fprintf(csv_group_events,
-        "update_group,%" PRIu64 ",%s,-,group,%ld,%" PRIu64 ",update,-,-,-,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",-\n",
+        "update_group,%" PRIu64 ",%s,-,group,%ld,%" PRIu64 ",%s,-,-,-,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",-\n",
         (uint64_t)time, gid, seed_edge_id, (uint64_t)attempt_id,
+        dash_if_empty(reason),
         (uint64_t)group_cap, (uint64_t)min_cap, (uint64_t)max_cap);
 }
 
