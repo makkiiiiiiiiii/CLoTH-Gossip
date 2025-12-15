@@ -106,17 +106,34 @@ void write_output(struct network* network, struct array* payments, char output_d
             fprintf(csv_group_output, ",");
         }
     }
-    struct group_update* group_update;
-    if(group->is_closed){
-        group_update = group->history->next->data;
-    }else{
-        group_update = group->history->data;
+    struct group_update* group_update = NULL;
+    int group_closed = (group->is_closed != GROUP_NOT_CLOSED);
+
+    if (group->history) {
+      if (group_closed && group->history->next) group_update = group->history->next->data;
+      else group_update = group->history->data;
     }
+
     float sum_cul = 0.0f;
-    for(j=0; j< n_members; j++){
-        sum_cul += (1.0f - ((float)group_update->group_cap / (float)group_update->edge_balances[j]));
+    if (group_update && n_members > 0) {
+      for (j = 0; j < n_members; j++) {
+        uint64_t eb = group_update->edge_balances[j];
+        if (eb == 0) continue;
+        sum_cul += (1.0f - ((float)group_update->group_cap / (float)eb));
+      }
     }
-    fprintf(csv_group_output, "%lu,%lu,%lu,%lu,%lu,%lu,%lu,%f\n", group->is_closed, group->constructed_time, group->min_cap_limit, group->max_cap_limit, group->max_cap, group->min_cap, group->group_cap, sum_cul / (float)n_members);
+
+    long long closed_time_out = group_closed ? (long long)group->is_closed : -1LL;
+
+    fprintf(csv_group_output, "%lld,%lu,%lu,%lu,%lu,%lu,%lu,%f\n",
+            closed_time_out,
+            group->constructed_time,
+            group->min_cap_limit,
+            group->max_cap_limit,
+            group->max_cap,
+            group->min_cap,
+            group->group_cap,
+            (n_members > 0 ? (sum_cul / (float)n_members) : 0.0f));
   }
   fclose(csv_group_output);
 
@@ -406,6 +423,10 @@ void read_input(struct network_params* net_params, struct payments_params* pay_p
         if(strcmp(value, "")==0) net_params->group_size = -1;
         else net_params->group_size = strtol(value, NULL, 10);
     }
+    else if(strcmp(parameter, "group_size_min")==0){
+      if(strcmp(value, "")==0) net_params->group_size_min = -1;
+      else net_params->group_size_min = strtol(value, NULL, 10);
+    }
     else if(strcmp(parameter, "group_limit_rate")==0){
         if(strcmp(value, "")==0) net_params->group_limit_rate = -1;
         else net_params->group_limit_rate = strtof(value, NULL);
@@ -507,6 +528,10 @@ void read_input(struct network_params* net_params, struct payments_params* pay_p
           fprintf(stderr, "ERROR: wrong value of parameter <group_size> in <cloth_input.txt>.\n");
           exit(-1);
       }
+      if(net_params->group_size_min <= 0 || net_params->group_size_min > net_params->group_size){
+          fprintf(stderr, "ERROR: group_size_min must satisfy 1 <= group_size_min <= group_size.\n");
+          exit(-1);
+      }
       if(net_params->group_cap_update == -1){
           fprintf(stderr, "ERROR: wrong value of parameter <group_cap_update> in <cloth_input.txt>.\n");
           exit(-1);
@@ -534,6 +559,10 @@ void read_input(struct network_params* net_params, struct payments_params* pay_p
     fprintf(stderr, "ERROR: max_leaves_per_group_tick must be >= 1.\n");
     exit(-1);
   }
+  if(net_params->group_size_min < 0){
+    net_params->group_size_min = net_params->group_size;
+  }
+
 
   fclose(input_file);
 }
@@ -734,7 +763,7 @@ int main(int argc, char *argv[]) {
     long gcount = array_len(network->groups);
     for (long i = 0; i < gcount; i++) {
       struct group* g = array_get(network->groups, i);
-      if (g && g->is_closed == 0) {
+      if (g && g->is_closed == GROUP_NOT_CLOSED) {
         group_close_once(simulation, g, "simulation_end");
       }
     }
@@ -743,7 +772,7 @@ int main(int argc, char *argv[]) {
     for (long i = 0; i < ecnt; i++) {
       struct edge* e = array_get(network->edges, i);
       if (!e) continue;
-      if (e && e->group && e->group->is_closed == 0) {
+      if (e && e->group && e->group->is_closed == GROUP_NOT_CLOSED) {
         group_close_once(simulation, e->group, "simulation_end");
       }
     }

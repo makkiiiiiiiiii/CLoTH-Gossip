@@ -17,6 +17,7 @@
 #define MINLATENCY 10
 #define MINBALANCE 1E2
 #define MAXBALANCE 1E11
+#define GROUP_NOT_CLOSED UINT64_MAX
 
 /* a policy that must be respected when forwarding a payment through an edge (see edge below) */
 struct policy {
@@ -112,7 +113,7 @@ struct group {
     uint64_t min_cap;
     uint64_t group_cap;            /* usually = min_cap if group_cap_update=true */
 
-    uint64_t is_closed;            /* if not zero, it describes closed time */
+    uint64_t is_closed; /* GROUP_NOT_CLOSED if open; otherwise closed time (can be 0) */
     uint64_t constructed_time;
 
     struct element* history;       /* list of `struct group_update` */

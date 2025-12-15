@@ -26,6 +26,7 @@ struct network_params{
   unsigned int group_cap_update;
   unsigned int group_broadcast_delay;
   int group_size;
+  int group_size_min;
   float group_limit_rate;
   unsigned int use_conventional_method;
   float group_min_cap_ratio;

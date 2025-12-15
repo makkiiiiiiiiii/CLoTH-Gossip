@@ -574,7 +574,7 @@ void group_close_once(struct simulation* sim,struct group* g,const char* reason)
   if (!g) return;
 
   /* すでに close 済みなら何もしない（冪等） */
-  if (g->is_closed != 0) return;
+  if (g->is_closed != GROUP_NOT_CLOSED) return;
 
   /* members を "id-id-..." 形式で組み立て（ログ出力用） */
   char members_buf[8192]; members_buf[0] = '\0';

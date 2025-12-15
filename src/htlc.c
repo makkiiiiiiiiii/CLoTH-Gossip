@@ -829,6 +829,26 @@ struct element* request_group_update(struct event* event, struct simulation* sim
                         group_close_once(simulation, group, "empty_after_leave");
                     }
                 }
+                /* ---- NEW: after leave, update group and dissolve if size < group_size_min ---- */
+                if (leaves_this_tick > 0) {
+                    /* メンバー集合が変わったので集計値・履歴を更新 */
+                    (void)update_group(group, net_params, simulation->current_time);
+
+                    /* サイズ不足なら解散：残メンバーをキューへ戻す */
+                    if ((long)array_len(group->edges) < (long)net_params.group_size_min) {
+                        group_close_once(simulation, group, "size_below_min");
+
+                        for (long jj = 0; jj < array_len(group->edges); jj++) {
+                            struct edge* rem = array_get(group->edges, jj);
+                            if (!rem) continue;
+                            rem->group = NULL;
+                            rem->last_leave_time = simulation->current_time;
+                            group_add_queue = enqueue_edge_fifo(group_add_queue, rem);
+                        }
+
+                        scheduled_construct = 1;
+                    }
+                }
 
                 array_free(leave_candidates);
             }
@@ -840,7 +860,7 @@ struct element* request_group_update(struct event* event, struct simulation* sim
             int close_flg = update_group(group, net_params, simulation->current_time);
 
             if (close_flg) {
-                if (group->is_closed == 0) {
+                if (group->is_closed == GROUP_NOT_CLOSED) {
                     group_close_once(simulation, group, "update_violation");
                 }
 
@@ -910,6 +930,26 @@ struct element* request_group_update(struct event* event, struct simulation* sim
                         (void)update_group(group, net_params, simulation->current_time);
                     } else {
                         group_close_once(simulation, group, "empty_after_leave");
+                    }
+                }
+                /* ---- NEW: after leave, update group and dissolve if size < group_size_min ---- */
+                if (leaves_this_tick > 0) {
+                    /* メンバー集合が変わったので集計値・履歴を更新 */
+                    (void)update_group(group, net_params, simulation->current_time);
+
+                    /* サイズ不足なら解散：残メンバーをキューへ戻す */
+                    if ((long)array_len(group->edges) < (long)net_params.group_size_min) {
+                        group_close_once(simulation, group, "size_below_min");
+
+                        for (long jj = 0; jj < array_len(group->edges); jj++) {
+                            struct edge* rem = array_get(group->edges, jj);
+                            if (!rem) continue;
+                            rem->group = NULL;
+                            rem->last_leave_time = simulation->current_time;
+                            group_add_queue = enqueue_edge_fifo(group_add_queue, rem);
+                        }
+
+                        scheduled_construct = 1;
                     }
                 }
 
@@ -992,7 +1032,7 @@ struct element* construct_groups(struct simulation* simulation,
         }
 
         group->id = -1;            /* commit されるまで -1 */
-        group->is_closed = 0;
+        group->is_closed = GROUP_NOT_CLOSED;
         group->constructed_time = simulation->current_time;
         group->history = NULL;
 
