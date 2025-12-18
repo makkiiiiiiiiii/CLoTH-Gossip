@@ -294,6 +294,14 @@ void initialize_input_parameters(struct network_params *net_params, struct payme
   net_params->k_used_on_min_edge        = 5;
   net_params->cooldown_hops             = 5;
   net_params->max_leaves_per_group_tick = 1;
+  net_params->group_size = -1;        /* target (required for GROUP_ROUTING) */
+  net_params->group_size_min = -1;    /* default later to group_size */
+  net_params->group_limit_rate = -1;  /* required */
+  net_params->group_cap_update = -1;  /* required */
+  net_params->group_broadcast_delay = 0; /* or -1 if you validate it */
+  net_params->use_conventional_method = 1; /* or 0, depending on your default */
+  net_params->group_min_cap_ratio = 0.0f;
+  net_params->group_max_cap_ratio = 0.0f;
 
   /* logging defaults */
   net_params->enable_group_event_csv = 1;
@@ -520,22 +528,25 @@ void read_input(struct network_params* net_params, struct payments_params* pay_p
   }
   // check invalid group settings
   if(net_params->routing_method == GROUP_ROUTING){
-      if(net_params->group_limit_rate < 0 || net_params->group_limit_rate > 1){
-          fprintf(stderr, "ERROR: wrong value of parameter <group_limit_rate> in <cloth_input.txt>.\n");
-          exit(-1);
-      }
-      if(net_params->group_size < 0){
-          fprintf(stderr, "ERROR: wrong value of parameter <group_size> in <cloth_input.txt>.\n");
-          exit(-1);
-      }
-      if(net_params->group_size_min <= 0 || net_params->group_size_min > net_params->group_size){
-          fprintf(stderr, "ERROR: group_size_min must satisfy 1 <= group_size_min <= group_size.\n");
-          exit(-1);
-      }
-      if(net_params->group_cap_update == -1){
-          fprintf(stderr, "ERROR: wrong value of parameter <group_cap_update> in <cloth_input.txt>.\n");
-          exit(-1);
-      }
+    if(net_params->group_limit_rate < 0 || net_params->group_limit_rate > 1){
+      fprintf(stderr, "ERROR: wrong value of parameter <group_limit_rate> in <cloth_input.txt>.\n");
+      exit(-1);
+    }
+    if(net_params->group_size <= 0){
+      fprintf(stderr, "ERROR: wrong value of parameter <group_size> in <cloth_input.txt>.\n");
+      exit(-1);
+    }
+    if (net_params->group_size_min < 0) {
+      net_params->group_size_min = net_params->group_size; /* min = target by default */
+    }
+    if(net_params->group_size_min <= 0 || net_params->group_size_min > net_params->group_size){
+      fprintf(stderr, "ERROR: group_size_min must satisfy 1 <= group_size_min <= group_size.\n");
+      exit(-1);
+    }
+    if(net_params->group_cap_update == -1){
+      fprintf(stderr, "ERROR: wrong value of parameter <group_cap_update> in <cloth_input.txt>.\n");
+      exit(-1);
+    }
   }
   if(net_params->tau_default < 0.0 || net_params->tau_default > 1.0){
     fprintf(stderr, "ERROR: tau_default must be in [0,1].\n");
@@ -559,10 +570,6 @@ void read_input(struct network_params* net_params, struct payments_params* pay_p
     fprintf(stderr, "ERROR: max_leaves_per_group_tick must be >= 1.\n");
     exit(-1);
   }
-  if(net_params->group_size_min < 0){
-    net_params->group_size_min = net_params->group_size;
-  }
-
 
   fclose(input_file);
 }
