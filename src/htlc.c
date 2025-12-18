@@ -97,6 +97,15 @@ static inline void maybe_count_min_cap_use(struct edge* e) {
     }
 }
 
+static int seen_group(struct array* seen, struct group* g)
+{
+    if (!seen || !g) return 0;
+    for (long i = 0; i < array_len(seen); i++) {
+        if ((struct group*)array_get(seen, i) == g) return 1;
+    }
+    return 0;
+}
+
 /* FUNCTIONS MANAGING NODE PAIR RESULTS */
 
 /* set the result of a node pair as success: it means that a payment was successfully forwarded in an edge connecting the two nodes of the node pair.
@@ -708,263 +717,291 @@ static struct element* enqueue_edge_fifo(struct element* head, struct edge* e)
 }
 
 /* ====== UPDATED: request_group_update with leave/rejoin mechanism ====== */
-struct element* request_group_update(struct event* event, struct simulation* simulation, struct network* network, struct network_params net_params, struct element* group_add_queue){
-
+struct element* request_group_update(struct event* event,
+                                     struct simulation* simulation,
+                                     struct network* network,
+                                     struct network_params net_params,
+                                     struct element* group_add_queue)
+{
     int scheduled_construct = 0; /* whether to schedule CONSTRUCTGROUPS at the end */
 
     /* parameters for leave decision (MVP defaults) */
-    const uint64_t cooldown_ms = (uint64_t)net_params.cooldown_hops
-                           * (uint64_t)net_params.average_payment_forward_interval;
+    const uint64_t cooldown_ms =
+        (uint64_t)net_params.cooldown_hops * (uint64_t)net_params.average_payment_forward_interval;
     const uint32_t max_leaves_per_group_tick = (uint32_t)net_params.max_leaves_per_group_tick;
 
-    for(long i = 0; i < array_len(event->payment->route->route_hops); i++){
+    /* double-processing guard (within this request_group_update call) */
+    struct array* processed_groups = array_initialize(8);
+
+    for (long i = 0; i < array_len(event->payment->route->route_hops); i++) {
         struct route_hop* hop = array_get(event->payment->route->route_hops, i);
         struct edge* edge = array_get(network->edges, hop->edge_id);
+        if (!edge) continue;
+
         struct edge* counter_edge = array_get(network->edges, edge->counter_edge_id);
 
         /* --- handle group for edge --- */
-        if(edge->group != NULL) {
+        if (edge->group != NULL) {
             struct group* group = edge->group;
-            int close_flg = update_group(group, net_params, simulation->current_time);
-            if (close_flg) {
-                // メンバーを外す前に "id-id-..." を作る
-                group_close_once(simulation, group, "update_violation");
 
-                /* add all edges to queue and clear membership */
-                for(long j = 0; j < array_len(group->edges); j++){
-                    struct edge* edge_in_group = array_get(group->edges, j);
-                    edge_in_group->group = NULL;
-                    edge_in_group->last_leave_time = simulation->current_time; /* mark leave time on close */
-                    /*変更前容量順ソート
-                    group_add_queue = list_insert_sorted_position(group_add_queue, edge_in_group, (long (*)(void *)) get_edge_balance);
-                    */
-                    /*変更後早いもの順*/
-                    group_add_queue = enqueue_edge_fifo(group_add_queue, edge_in_group);
-                }
+            /* guard: process each group at most once per event */
+            if (!seen_group(processed_groups, group)) {
+                processed_groups = array_insert(processed_groups, group);
 
-                /* schedule reconstruction immediately */
-                uint64_t next_event_time = simulation->current_time;
-                struct event* next_event = new_event(next_event_time, CONSTRUCTGROUPS, event->node_id, event->payment);
-                simulation->events = heap_insert(simulation->events, next_event, compare_event);
-                scheduled_construct = 1;
-            } else {
-                /* leave decision (UL/K with cooldown, cap per tick) */
-                long m = array_len(group->edges);
-                struct array* leave_candidates = array_initialize(m > 0 ? m : 1);
-                uint32_t leaves_this_tick = 0;
+                int close_flg = update_group(group, net_params, simulation->current_time);
 
-                for(long j = 0; j < m; j++){
-                    struct edge* e = array_get(group->edges, j);
-                    if(e == NULL) continue;
+                if (close_flg) {
+                    group_close_once(simulation, group, "update_violation");
 
-                    /* cooldown */
-                    if(simulation->current_time >= e->last_leave_time &&
-                       (simulation->current_time - e->last_leave_time) < cooldown_ms){
-                        continue;
+                    /* add all edges to queue and clear membership */
+                    for (long j = 0; j < array_len(group->edges); j++) {
+                        struct edge* edge_in_group = array_get(group->edges, j);
+                        if (!edge_in_group) continue;
+                        edge_in_group->group = NULL;
+                        edge_in_group->last_leave_time = simulation->current_time;
+                        group_add_queue = enqueue_edge_fifo(group_add_queue, edge_in_group);
                     }
 
-                    /* UL = max(0, 1 - group_cap / balance) */
-                    double UL = 0.0;
-                    if(e->balance > 0){
-                        UL = 1.0 - ((double)group->group_cap / (double)e->balance);
-                        if(UL < 0.0) UL = 0.0;
-                        if(UL > 1.0) UL = 1.0;
+                    /* schedule reconstruction immediately */
+                    {
+                        uint64_t next_event_time = simulation->current_time;
+                        struct event* next_event = new_event(next_event_time, CONSTRUCTGROUPS,
+                                                             event->node_id, event->payment);
+                        simulation->events = heap_insert(simulation->events, next_event, compare_event);
                     }
-                    int divergence = (UL >= e->tolerance_tau);
+                    scheduled_construct = 1;
 
-                    if(divergence){
-                        leave_candidates = array_insert(leave_candidates, e);
-                    }
-                }
+                } else {
+                    /* leave decision (UL/K with cooldown, cap per tick) */
+                    long m = array_len(group->edges);
+                    struct array* leave_candidates = array_initialize(m > 0 ? m : 1);
+                    uint32_t leaves_this_tick = 0;
 
-                long c = array_len(leave_candidates);
-                for(long k = 0; k < c && leaves_this_tick < (long)max_leaves_per_group_tick; k++){
-                    struct edge* e = array_get(leave_candidates, k);
-                    if (net_params.enable_group_event_csv && csv_group_events) {
+                    for (long j = 0; j < m; j++) {
+                        struct edge* e = array_get(group->edges, j);
+                        if (e == NULL) continue;
+
+                        /* cooldown */
+                        if (simulation->current_time >= e->last_leave_time &&
+                            (simulation->current_time - e->last_leave_time) < cooldown_ms) {
+                            continue;
+                        }
+
+                        /* UL = max(0, 1 - group_cap / balance) */
                         double UL = 0.0;
                         if (e->balance > 0) {
                             UL = 1.0 - ((double)group->group_cap / (double)e->balance);
                             if (UL < 0.0) UL = 0.0;
                             if (UL > 1.0) UL = 1.0;
                         }
-                        uint64_t used_since_join = (e->tot_flows >= e->flows_at_join)
-                                                   ? (e->tot_flows - e->flows_at_join) : 0;
 
-                        // 理由の詳細はセミコロン区切りで（CSV列ずれ回避）
-                        char reason_buf[128];
-                        snprintf(reason_buf, sizeof(reason_buf),
-                                 "UL=%.6f;used=%" PRIu64, UL, used_since_join);
-
-                        ge_leave((uint64_t)simulation->current_time,
-                                 group->id,
-                                 e->id,
-                                 reason_buf,
-                                 group->group_cap,
-                                 group->min_cap,
-                                 group->max_cap,
-                                 group->seed_edge_id,
-                                 group->attempt_id);
+                        if (UL >= e->tolerance_tau) {
+                            leave_candidates = array_insert(leave_candidates, e);
+                        }
                     }
 
-                    /* remove from group and enqueue */
-                    remove_edge_from_group(group, e);
-                    e->group = NULL;
-                    e->last_leave_time = simulation->current_time;
+                    long c = array_len(leave_candidates);
+                    for (long k = 0; k < c && leaves_this_tick < (long)max_leaves_per_group_tick; k++) {
+                        struct edge* e = array_get(leave_candidates, k);
+                        if (!e) continue;
 
-                    /*変更前容量順ソート
-                    group_add_queue = list_insert_sorted_position(group_add_queue, e, (long (*)(void *)) get_edge_balance);
-                    */
-                    /*変更後早いもの順*/
-                    group_add_queue = enqueue_edge_fifo(group_add_queue, e);
+                        if (net_params.enable_group_event_csv && csv_group_events) {
+                            double UL = 0.0;
+                            if (e->balance > 0) {
+                                UL = 1.0 - ((double)group->group_cap / (double)e->balance);
+                                if (UL < 0.0) UL = 0.0;
+                                if (UL > 1.0) UL = 1.0;
+                            }
+                            uint64_t used_since_join =
+                                (e->tot_flows >= e->flows_at_join) ? (e->tot_flows - e->flows_at_join) : 0;
 
-                    leaves_this_tick++;
-                    scheduled_construct = 1;
-                }
-                /* A: メンバー集合が変わったので group 状態を再計算（このtickで1回だけ） */
-                if (leaves_this_tick > 0 && group->is_closed == 0) {
-                    /* group->edges が空になったら解散/closeの方が自然 */
-                    if (array_len(group->edges) > 0) {
-                        (void)update_group(group, net_params, simulation->current_time);
-                    } else {
-                        group_close_once(simulation, group, "empty_after_leave");
-                    }
-                }
-                /* ---- NEW: after leave, update group and dissolve if size < group_size_min ---- */
-                if (leaves_this_tick > 0) {
-                    /* メンバー集合が変わったので集計値・履歴を更新 */
-                    (void)update_group(group, net_params, simulation->current_time);
+                            char reason_buf[128];
+                            snprintf(reason_buf, sizeof(reason_buf),
+                                     "UL=%.6f;used=%" PRIu64, UL, used_since_join);
 
-                    /* サイズ不足なら解散：残メンバーをキューへ戻す */
-                    if ((long)array_len(group->edges) < (long)net_params.group_size_min) {
-                        group_close_once(simulation, group, "size_below_min");
-
-                        for (long jj = 0; jj < array_len(group->edges); jj++) {
-                            struct edge* rem = array_get(group->edges, jj);
-                            if (!rem) continue;
-                            rem->group = NULL;
-                            rem->last_leave_time = simulation->current_time;
-                            group_add_queue = enqueue_edge_fifo(group_add_queue, rem);
+                            ge_leave((uint64_t)simulation->current_time,
+                                     group->id,
+                                     e->id,
+                                     reason_buf,
+                                     group->group_cap,
+                                     group->min_cap,
+                                     group->max_cap,
+                                     group->seed_edge_id,
+                                     group->attempt_id);
                         }
 
+                        /* remove from group and enqueue */
+                        remove_edge_from_group(group, e);
+                        e->group = NULL;
+                        e->last_leave_time = simulation->current_time;
+                        group_add_queue = enqueue_edge_fifo(group_add_queue, e);
+
+                        leaves_this_tick++;
                         scheduled_construct = 1;
                     }
-                }
 
-                array_free(leave_candidates);
+                    /* after leave, update group and dissolve if size < group_size_min */
+                    if (leaves_this_tick > 0 && group->is_closed == GROUP_NOT_CLOSED) {
+                        (void)update_group(group, net_params, simulation->current_time);
+
+                        if ((long)array_len(group->edges) < (long)net_params.group_size_min) {
+                            group_close_once(simulation, group, "size_below_min");
+
+                            /* enqueue remaining members */
+                            for (long jj = 0; jj < array_len(group->edges); jj++) {
+                                struct edge* rem = array_get(group->edges, jj);
+                                if (!rem) continue;
+                                rem->group = NULL;
+                                rem->last_leave_time = simulation->current_time;
+                                group_add_queue = enqueue_edge_fifo(group_add_queue, rem);
+                            }
+
+                            scheduled_construct = 1;
+                        }
+                    }
+
+                    array_free(leave_candidates);
+                }
             }
         }
 
         /* --- handle group for counter_edge (symmetric) --- */
-        if(counter_edge->group != NULL) {
+        if (counter_edge && counter_edge->group != NULL) {
             struct group* group = counter_edge->group;
-            int close_flg = update_group(group, net_params, simulation->current_time);
 
-            if (close_flg) {
-                if (group->is_closed == GROUP_NOT_CLOSED) {
-                    group_close_once(simulation, group, "update_violation");
-                }
+            /* guard: process each group at most once per event */
+            if (!seen_group(processed_groups, group)) {
+                processed_groups = array_insert(processed_groups, group);
 
-                for (long j = 0; j < array_len(group->edges); j++) {
-                    struct edge* edge_in_group = array_get(group->edges, j);
-                    if (edge_in_group) {
+                int close_flg = update_group(group, net_params, simulation->current_time);
+
+                if (close_flg) {
+                    if (group->is_closed == GROUP_NOT_CLOSED) {
+                        group_close_once(simulation, group, "update_violation");
+                    }
+
+                    for (long j = 0; j < array_len(group->edges); j++) {
+                        struct edge* edge_in_group = array_get(group->edges, j);
+                        if (!edge_in_group) continue;
                         edge_in_group->group = NULL;
                         edge_in_group->last_leave_time = simulation->current_time;
-                        /*変更前容量順ソート
-                        group_add_queue = list_insert_sorted_position(group_add_queue, edge_in_group, (long (*)(void *)) get_edge_balance);
-                        */
-                        /*変更後早いもの順*/
                         group_add_queue = enqueue_edge_fifo(group_add_queue, edge_in_group);
                     }
-                }
 
-                uint64_t next_event_time = simulation->current_time;
-                struct event* next_event = new_event(next_event_time, CONSTRUCTGROUPS, event->node_id, event->payment);
-                simulation->events = heap_insert(simulation->events, next_event, compare_event);
-                scheduled_construct = 1;
-            } else {
-                long m = array_len(group->edges);
-                struct array* leave_candidates = array_initialize(m > 0 ? m : 1);
-                uint32_t leaves_this_tick = 0;
-
-                for(long j = 0; j < m; j++){
-                    struct edge* e = array_get(group->edges, j);
-                    if(e == NULL) continue;
-
-                    if(simulation->current_time >= e->last_leave_time &&
-                       (simulation->current_time - e->last_leave_time) < cooldown_ms){
-                        continue;
+                    {
+                        uint64_t next_event_time = simulation->current_time;
+                        struct event* next_event = new_event(next_event_time, CONSTRUCTGROUPS,
+                                                             event->node_id, event->payment);
+                        simulation->events = heap_insert(simulation->events, next_event, compare_event);
                     }
-
-                    double UL = 0.0;
-                    if(e->balance > 0){
-                        UL = 1.0 - ((double)group->group_cap / (double)e->balance);
-                        if(UL < 0.0) UL = 0.0;
-                        if(UL > 1.0) UL = 1.0;
-                    }
-
-                    int divergence = (UL >= e->tolerance_tau);
-
-                    if(divergence){
-                        leave_candidates = array_insert(leave_candidates, e);
-                    }
-                }
-
-                long c = array_len(leave_candidates);
-                for(long k = 0; k < c && leaves_this_tick < (long)max_leaves_per_group_tick; k++){
-                    struct edge* e = array_get(leave_candidates, k);
-                    remove_edge_from_group(group, e);
-                    e->group = NULL;
-                    e->last_leave_time = simulation->current_time;
-                    /*変更前容量順ソート
-                    group_add_queue = list_insert_sorted_position(group_add_queue, e, (long (*)(void *)) get_edge_balance);
-                    */
-                    /*変更後早いもの順*/
-                    group_add_queue = enqueue_edge_fifo(group_add_queue, e);
-
-                    leaves_this_tick++;
                     scheduled_construct = 1;
-                }
-                /* A: メンバー集合が変わったので group 状態を再計算（このtickで1回だけ） */
-                if (leaves_this_tick > 0 && group->is_closed == 0) {
-                    if (array_len(group->edges) > 0) {
-                        (void)update_group(group, net_params, simulation->current_time);
-                    } else {
-                        group_close_once(simulation, group, "empty_after_leave");
-                    }
-                }
-                /* ---- NEW: after leave, update group and dissolve if size < group_size_min ---- */
-                if (leaves_this_tick > 0) {
-                    /* メンバー集合が変わったので集計値・履歴を更新 */
-                    (void)update_group(group, net_params, simulation->current_time);
 
-                    /* サイズ不足なら解散：残メンバーをキューへ戻す */
-                    if ((long)array_len(group->edges) < (long)net_params.group_size_min) {
-                        group_close_once(simulation, group, "size_below_min");
+                } else {
+                    long m = array_len(group->edges);
+                    struct array* leave_candidates = array_initialize(m > 0 ? m : 1);
+                    uint32_t leaves_this_tick = 0;
 
-                        for (long jj = 0; jj < array_len(group->edges); jj++) {
-                            struct edge* rem = array_get(group->edges, jj);
-                            if (!rem) continue;
-                            rem->group = NULL;
-                            rem->last_leave_time = simulation->current_time;
-                            group_add_queue = enqueue_edge_fifo(group_add_queue, rem);
+                    for (long j = 0; j < m; j++) {
+                        struct edge* e = array_get(group->edges, j);
+                        if (e == NULL) continue;
+
+                        if (simulation->current_time >= e->last_leave_time &&
+                            (simulation->current_time - e->last_leave_time) < cooldown_ms) {
+                            continue;
                         }
 
+                        double UL = 0.0;
+                        if (e->balance > 0) {
+                            UL = 1.0 - ((double)group->group_cap / (double)e->balance);
+                            if (UL < 0.0) UL = 0.0;
+                            if (UL > 1.0) UL = 1.0;
+                        }
+
+                        if (UL >= e->tolerance_tau) {
+                            leave_candidates = array_insert(leave_candidates, e);
+                        }
+                    }
+
+                    long c = array_len(leave_candidates);
+                    for (long k = 0; k < c && leaves_this_tick < (long)max_leaves_per_group_tick; k++) {
+                        struct edge* e = array_get(leave_candidates, k);
+                        if (!e) continue;
+
+                        /* NEW: log leave for counter_edge side as well */
+                        if (net_params.enable_group_event_csv && csv_group_events) {
+                            double UL = 0.0;
+                            if (e->balance > 0) {
+                                UL = 1.0 - ((double)group->group_cap / (double)e->balance);
+                                if (UL < 0.0) UL = 0.0;
+                                if (UL > 1.0) UL = 1.0;
+                            }
+                            uint64_t used_since_join =
+                                (e->tot_flows >= e->flows_at_join) ? (e->tot_flows - e->flows_at_join) : 0;
+
+                            char reason_buf[128];
+                            /* edge側と同形式。識別したいなら prefix を付けてもよい */
+                            snprintf(reason_buf, sizeof(reason_buf),
+                                     "UL=%.6f;used=%" PRIu64, UL, used_since_join);
+                            /* 例：識別したい場合
+                               snprintf(reason_buf, sizeof(reason_buf),
+                                        "side=counter;UL=%.6f;used=%" PRIu64, UL, used_since_join);
+                            */
+
+                            ge_leave((uint64_t)simulation->current_time,
+                                     group->id,
+                                     e->id,
+                                     reason_buf,
+                                     group->group_cap,
+                                     group->min_cap,
+                                     group->max_cap,
+                                     group->seed_edge_id,
+                                     group->attempt_id);
+                        }
+
+                        /* remove from group and enqueue */
+                        remove_edge_from_group(group, e);
+                        e->group = NULL;
+                        e->last_leave_time = simulation->current_time;
+                        group_add_queue = enqueue_edge_fifo(group_add_queue, e);
+
+                        leaves_this_tick++;
                         scheduled_construct = 1;
                     }
-                }
 
-                array_free(leave_candidates);
+                    /* after leave, update group and dissolve if size < group_size_min */
+                    if (leaves_this_tick > 0 && group->is_closed == GROUP_NOT_CLOSED) {
+                        (void)update_group(group, net_params, simulation->current_time);
+
+                        if ((long)array_len(group->edges) < (long)net_params.group_size_min) {
+                            group_close_once(simulation, group, "size_below_min");
+
+                            for (long jj = 0; jj < array_len(group->edges); jj++) {
+                                struct edge* rem = array_get(group->edges, jj);
+                                if (!rem) continue;
+                                rem->group = NULL;
+                                rem->last_leave_time = simulation->current_time;
+                                group_add_queue = enqueue_edge_fifo(group_add_queue, rem);
+                            }
+
+                            scheduled_construct = 1;
+                        }
+                    }
+
+                    array_free(leave_candidates);
+                }
             }
         }
     }
 
-    /* schedule CONSTRUCTGROUPS once if any leave/close occurred (or rely on above immediate schedule for close) */
-    if(scheduled_construct){
+    /* schedule CONSTRUCTGROUPS once if any leave/close occurred */
+    if (scheduled_construct) {
         uint64_t next_event_time = simulation->current_time + net_params.group_broadcast_delay;
-        struct event* next_event = new_event(next_event_time, CONSTRUCTGROUPS, event->node_id, event->payment);
+        struct event* next_event = new_event(next_event_time, CONSTRUCTGROUPS,
+                                             event->node_id, event->payment);
         simulation->events = heap_insert(simulation->events, next_event, compare_event);
     }
 
+    array_free(processed_groups);
     return group_add_queue;
 }
 
