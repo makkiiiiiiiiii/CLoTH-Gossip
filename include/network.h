@@ -69,6 +69,7 @@ struct edge {
 
   /* === stats: how many times used as group min capacity === */
   uint64_t min_cap_use_count;
+  unsigned int in_group_add_queue; /* 1 if this edge is currently enqueued */
 };
 
 struct edge_locked_balance_and_duration{

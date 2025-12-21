@@ -703,11 +703,17 @@ void receive_fail(struct event* event, struct simulation* simulation, struct net
 /* FIFO で edge を group_add_queue に追加するヘルパー */
 static struct element* enqueue_edge_fifo(struct element* head, struct edge* e)
 {
+    if (!e) return head;
+
+    /* 既にキュー内なら二重追加しない */
+    if (e->in_group_add_queue) return head;
+
+    /* “今からキューに居る” を先に確定させる */
+    e->in_group_add_queue = 1;
+
     if (head == NULL) {
-        /* 最初の1本だけは push で new head を作る */
         return push(NULL, e);
     } else {
-        /* 末尾まで進んで、その後ろに挿入する */
         struct element* tail = head;
         while (tail->next != NULL) {
             tail = tail->next;
@@ -1125,18 +1131,19 @@ struct element* construct_groups(struct simulation* simulation,
             /* queue から chosen_nodes に含まれるノードを削除（早いもの順のまま） */
             for (int i = 0; i < array_len(chosen_nodes); i++) {
                 struct element* node = array_get(chosen_nodes, i);
+
+                /* node->data は edge* のはずなので、キューから外す＝フラグを戻す */
+                struct edge* dequeued = (struct edge*)node->data;
+                if (dequeued) dequeued->in_group_add_queue = 0;
+
                 struct element* prev = node->prev;
                 struct element* next = node->next;
 
-                if (prev) {
-                    prev->next = next;
-                } else {
-                    /* 先頭だった場合は head を更新 */
-                    group_add_queue = next;
-                }
-                if (next) {
-                    next->prev = prev;
-                }
+                if (prev) prev->next = next;
+                else      group_add_queue = next;
+
+                if (next) next->prev = prev;
+
                 free(node);
             }
 

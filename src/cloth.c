@@ -663,12 +663,21 @@ int main(int argc, char *argv[]) {
     // add edge which is not a member of any group to group_add_queue
     struct element* group_add_queue = NULL;
     if(net_params.routing_method == GROUP_ROUTING) {
-        for (int i = 0; i < n_edges; i++) {
-            group_add_queue = list_insert_sorted_position(group_add_queue, array_get(network->edges, i), (long (*)(void *)) get_edge_balance);
+      for (int i = 0; i < n_edges; i++) {
+        struct edge* e = array_get(network->edges, i);
+        if (!e) continue;
+
+        if (!e->in_group_add_queue) {
+          e->in_group_add_queue = 1;
+          group_add_queue = list_insert_sorted_position(
+              group_add_queue, e, (long (*)(void *)) get_edge_balance
+          );
         }
+      }
         group_add_queue = construct_groups(simulation, group_add_queue, network, net_params);
     }
     printf("group_cover_rate on init : %f\n", (float)(array_len(network->edges) - list_len(group_add_queue)) / (float)(array_len(network->edges)));
+    printf("n_edges=%ld, queue_len_after_init=%ld\n",array_len(network->edges), list_len(group_add_queue));
 
   printf("PAYMENTS INITIALIZATION\n");
   payments = initialize_payments(pay_params,  n_nodes, simulation->random_generator); //支払いイベントの生成

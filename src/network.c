@@ -62,6 +62,7 @@ struct edge* new_edge(long id, long channel_id, long counter_edge_id,
 
   /* initialize min-cap usage counter */
   edge->min_cap_use_count = 0;
+  edge->in_group_add_queue = 0;
 
   return edge;
 }

@@ -19,4 +19,6 @@ int is_key_equal(struct distance* a, struct distance* b);
 
 int can_join_group(struct group* group, struct edge* edge);
 
+int can_fill_group(struct group* group, struct edge* edge, struct network_params net_params);
+
 #endif
