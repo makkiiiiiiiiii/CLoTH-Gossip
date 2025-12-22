@@ -61,3 +61,10 @@ dijkstra_cache/*
 .DS_Store
 tasks.json
 .vscode
+
+# build artifacts / simulation outputs
+/build/
+/result/
+*_output.csv
+*.log
+*.tmp
