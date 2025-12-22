@@ -722,6 +722,150 @@ static struct element* enqueue_edge_fifo(struct element* head, struct edge* e)
     }
 }
 
+/* 先頭ノードを末尾へ回す（ノードをfreeしない！ in_group_add_queueも触らない！） */
+static struct element* rotate_queue_head_to_tail(struct element* head)
+{
+    if (head == NULL || head->next == NULL) return head;
+
+    struct element* old_head = head;
+    struct element* new_head = head->next;
+
+    /* detach old_head */
+    new_head->prev = NULL;
+    old_head->next = NULL;
+
+    /* find tail */
+    struct element* tail = new_head;
+    while (tail->next != NULL) tail = tail->next;
+
+    /* append */
+    tail->next = old_head;
+    old_head->prev = tail;
+
+    return new_head;
+}
+
+/* 補充(join)用の条件：あなたの(5)を「補充専用」として実装 */
+static int can_fill_group_local(struct group* g, struct edge* e, struct network_params net_params)
+{
+    if (!g || !e) return 0;
+
+    /* closed group には入れない */
+    if (g->is_closed != GROUP_NOT_CLOSED) return 0;
+
+    /* すでに別グループ所属なら補充しない */
+    if (e->group != NULL) return 0;
+
+    /* target(=group_size) 未満のときだけ補充 */
+    if ((long)array_len(g->edges) >= (long)net_params.group_size) return 0;
+
+    /* (a)(b) は既存の can_join_group を流用（レンジ＋ノード共有禁止＋重複禁止） */
+    if (!can_join_group(g, e)) return 0;
+
+    /* (d) group_cap を下げない（= 自分が新しい最小にならない安全版） */
+    if (e->balance < g->group_cap) return 0;
+
+    return 1;
+}
+
+/* 既存グループ補充フェーズ：残った queue から size<group_size のグループへ入れる */
+static struct element* fill_existing_groups(struct simulation* simulation,
+                                            struct element* group_add_queue,
+                                            struct network* network,
+                                            struct network_params net_params)
+{
+    if (!simulation || !network) return group_add_queue;
+    if (group_add_queue == NULL) return group_add_queue;
+
+    /* 既存グループを順に見て、足りないものを埋める */
+    for (long gi = 0; gi < array_len(network->groups); gi++) {
+        struct group* g = array_get(network->groups, gi);
+        if (!g) continue;
+        if (g->is_closed != GROUP_NOT_CLOSED) continue;
+
+        long before_size = array_len(g->edges);
+        if (before_size >= (long)net_params.group_size) continue;
+
+        /* このグループで補充できた edge を記録（最後に1回だけ update_group & ログ） */
+        struct array* filled_edges = array_initialize(4);
+
+        struct element* cur = group_add_queue;
+        while (cur != NULL && (long)array_len(g->edges) < (long)net_params.group_size) {
+            struct element* next = cur->next;
+            struct edge* e = (struct edge*)cur->data;
+
+            if (e && can_fill_group_local(g, e, net_params)) {
+                /* --- queue から cur を削除（採用） --- */
+                if (cur->prev) cur->prev->next = cur->next;
+                else          group_add_queue = cur->next;
+                if (cur->next) cur->next->prev = cur->prev;
+
+                /* キューから外れたのでフラグを戻す */
+                e->in_group_add_queue = 0;
+
+                free(cur);
+
+                /* --- group に追加 --- */
+                g->edges = array_insert(g->edges, e);
+                e->group = g;
+
+                /* leave/rejoin メタ */
+                e->join_time     = simulation->current_time;
+                e->flows_at_join = e->tot_flows;
+                e->tolerance_tau = net_params.tau_randomize
+                    ? (gsl_rng_uniform(simulation->random_generator) *
+                       (net_params.tau_max - net_params.tau_min) + net_params.tau_min)
+                    : net_params.tau_default;
+
+                filled_edges = array_insert(filled_edges, e);
+            }
+
+            cur = next;
+        }
+
+        /* このグループに1本でも補充できたら、最後に1回だけ update_group */
+        if (array_len(filled_edges) > 0 && g->is_closed == GROUP_NOT_CLOSED) {
+            int close_flg = update_group(g, net_params, simulation->current_time);
+
+            /* 基本ここは起きない想定（can_fillが構造条件を満たすため）だが、安全のため */
+            if (close_flg) {
+                group_close_once(simulation, g, "update_violation_after_fill");
+
+                /* 残メンバーをキューへ戻す（in_group_add_queue=0 のはずなのでenqueue可） */
+                for (long j = 0; j < array_len(g->edges); j++) {
+                    struct edge* rem = array_get(g->edges, j);
+                    if (!rem) continue;
+                    rem->group = NULL;
+                    rem->last_leave_time = simulation->current_time;
+                    group_add_queue = enqueue_edge_fifo(group_add_queue, rem);
+                }
+            } else {
+                /* join ログ（補充） */
+                if (net_params.enable_group_event_csv && csv_group_events) {
+                    for (long k = 0; k < array_len(filled_edges); k++) {
+                        struct edge* fe = array_get(filled_edges, k);
+                        if (!fe) continue;
+
+                        ge_join((uint64_t)simulation->current_time,
+                                (long)g->id,
+                                (long)fe->id,
+                                "fill",
+                                (uint64_t)g->group_cap,
+                                (uint64_t)g->min_cap,
+                                (uint64_t)g->max_cap,
+                                (long)g->seed_edge_id,
+                                (uint64_t)g->attempt_id);
+                    }
+                }
+            }
+        }
+
+        array_free(filled_edges);
+    }
+
+    return group_add_queue;
+}
+
 /* ====== UPDATED: request_group_update with leave/rejoin mechanism ====== */
 struct element* request_group_update(struct event* event,
                                      struct simulation* simulation,
@@ -1021,68 +1165,58 @@ struct element* construct_groups(struct simulation* simulation,
 
     static uint64_t attempt_counter = 0;  /* 全体で単調増加 */
 
-    /* 無限ループ防止：この呼び出し中は queue を最大1周ぶんだけ seed 回しを許す */
+    /* その呼び出しで「最大1周」だけ seed を回す（無限ループ防止） */
     long max_rotations = 0;
-    for (struct element* t = group_add_queue; t != NULL; t = t->next) {
-        max_rotations++;
-    }
+    for (struct element* t = group_add_queue; t != NULL; t = t->next) max_rotations++;
     long rotations = 0;
 
+    /* ===== 新規グループ構築フェーズ（回せるだけ回す） ===== */
     while (group_add_queue != NULL) {
-        /* 1周しても1つもcommitできないなら、今回は諦めて次回イベントに回す */
+
         if (rotations >= max_rotations) {
+            /* 1周しても commit できないなら今回は打ち切り（残りは次回CONSTRUCTGROUPSへ） */
             break;
         }
 
-        int logged_begin = 0;
-        int logged_abort = 0;
-
-        /* 先頭の edge を「今回の試行の seed」とみなす */
+        /* 先頭を seed */
         struct edge* seed_edge = (struct edge*)group_add_queue->data;
         uint64_t attempt_id = ++attempt_counter;
 
-        if (net_params.enable_group_event_csv && csv_group_events && !logged_begin) {
+        if (net_params.enable_group_event_csv && csv_group_events) {
             ge_construct_begin((uint64_t)simulation->current_time,
                                (long)seed_edge->id,
                                (uint64_t)attempt_id);
-            logged_begin = 1;
         }
 
-        /* 新しい group 構造体を作成 */
+        /* provisional group */
         struct group* group = malloc(sizeof(struct group));
-        if (!group) {
-            /* メモリ不足なら諦めてそのまま返す */
-            return group_add_queue;
-        }
+        if (!group) return group_add_queue;
 
         group->edges = array_initialize(net_params.group_size);
         group->seed_edge_id = seed_edge->id;
         group->attempt_id   = attempt_id;
 
-        /* seed_edge の balance を基準に min/max を決定 */
+        /* seed 由来の min/max */
         if (net_params.use_conventional_method) {
             group->max_cap_limit = seed_edge->balance +
                 (uint64_t)((float)seed_edge->balance * net_params.group_limit_rate);
             group->min_cap_limit = seed_edge->balance -
                 (uint64_t)((float)seed_edge->balance * net_params.group_limit_rate);
-            if (group->max_cap_limit < seed_edge->balance)
-                group->max_cap_limit = UINT64_MAX;
-            if (group->min_cap_limit > seed_edge->balance)
-                group->min_cap_limit = 0;
+            if (group->max_cap_limit < seed_edge->balance) group->max_cap_limit = UINT64_MAX;
+            if (group->min_cap_limit > seed_edge->balance) group->min_cap_limit = 0;
         } else {
             group->max_cap_limit = (uint64_t)((float)seed_edge->balance * net_params.group_max_cap_ratio);
             group->min_cap_limit = (uint64_t)((float)seed_edge->balance * net_params.group_min_cap_ratio);
         }
 
-        group->id = -1;            /* commit されるまで -1 */
+        group->id = -1;
         group->is_closed = GROUP_NOT_CLOSED;
         group->constructed_time = simulation->current_time;
         group->history = NULL;
 
-        /* どの queue ノードを採用したかを覚えておく配列（後で一気に削除する用） */
+        /* 採用した queue ノードを記録して後で一括削除 */
         struct array* chosen_nodes = array_initialize(net_params.group_size);
 
-        /* 早いもの順：queue の head から順に舐めていく */
         for (struct element* cur = group_add_queue;
              cur != NULL && array_len(group->edges) < net_params.group_size;
              cur = cur->next)
@@ -1096,43 +1230,33 @@ struct element* construct_groups(struct simulation* simulation,
         }
 
         if (array_len(group->edges) == net_params.group_size) {
-            /* ===== 成功パス：group_size 本そろったので commit ===== */
-
-            /* ID を採番してから group_cap/min/max を実 balances で更新 */
+            /* ===== commit ===== */
             group->id = array_len(network->groups);
             update_group(group, net_params, simulation->current_time);
 
-            /* メンバーIDを "id-id-..." でつなぐ */
-            char members_buf[8192];
-            members_buf[0] = '\0';
+            /* members string */
+            char members_buf[8192]; members_buf[0] = '\0';
             for (int k = 0; k < array_len(group->edges); k++) {
                 struct edge* me = array_get(group->edges, k);
                 char tmp[64];
-                snprintf(tmp, sizeof(tmp), "%s%ld",
-                         (k == 0 ? "" : "-"),
-                         (long)me->id);
-                strncat(members_buf, tmp,
-                        sizeof(members_buf) - strlen(members_buf) - 1);
+                snprintf(tmp, sizeof(tmp), "%s%ld", (k == 0 ? "" : "-"), (long)me->id);
+                strncat(members_buf, tmp, sizeof(members_buf) - strlen(members_buf) - 1);
             }
 
             if (net_params.enable_group_event_csv && csv_group_events) {
-                ge_construct_commit(
-                    (uint64_t)simulation->current_time,
-                    (long)group->id,
-                    members_buf,
-                    (uint64_t)group->group_cap,
-                    (uint64_t)group->min_cap,
-                    (uint64_t)group->max_cap,
-                    (long)group->seed_edge_id,
-                    (uint64_t)attempt_id
-                );
+                ge_construct_commit((uint64_t)simulation->current_time,
+                                    (long)group->id,
+                                    members_buf,
+                                    (uint64_t)group->group_cap,
+                                    (uint64_t)group->min_cap,
+                                    (uint64_t)group->max_cap,
+                                    (long)group->seed_edge_id,
+                                    (uint64_t)attempt_id);
             }
 
-            /* queue から chosen_nodes に含まれるノードを削除（早いもの順のまま） */
+            /* queue から chosen_nodes を削除（= dequeue なのでフラグを0に戻す） */
             for (int i = 0; i < array_len(chosen_nodes); i++) {
                 struct element* node = array_get(chosen_nodes, i);
-
-                /* node->data は edge* のはずなので、キューから外す＝フラグを戻す */
                 struct edge* dequeued = (struct edge*)node->data;
                 if (dequeued) dequeued->in_group_add_queue = 0;
 
@@ -1146,10 +1270,9 @@ struct element* construct_groups(struct simulation* simulation,
 
                 free(node);
             }
-
             array_free(chosen_nodes);
 
-            /* メンバー edge 側のメタデータ初期化 & join ログ */
+            /* edge 側の join 初期化 & join ログ */
             for (int i = 0; i < array_len(group->edges); i++) {
                 struct edge* ge = array_get(group->edges, i);
                 ge->group = group;
@@ -1174,51 +1297,42 @@ struct element* construct_groups(struct simulation* simulation,
                 }
             }
 
-            /* network に登録 */
             network->groups = array_insert(network->groups, group);
 
-            /* commitできたので、seed回しカウンタをリセットし、残りで次を試す */
+            /* commit できたので seed 周回をリセットし、残りで継続 */
             rotations = 0;
 
-            /* queue 長が変わっているので、次の1周上限を再計算 */
+            /* queue 長が変わったので 1周上限を再計算 */
             max_rotations = 0;
-            for (struct element* t = group_add_queue; t != NULL; t = t->next) {
-                max_rotations++;
-            }
+            for (struct element* t = group_add_queue; t != NULL; t = t->next) max_rotations++;
 
-            continue;
-        } else {
-            /* ===== 失敗パス：group_size 本集まらなかったので seed を回して継続 ===== */
-
-            if (!logged_abort && net_params.enable_group_event_csv && csv_group_events) {
-                ge_construct_abort((uint64_t)simulation->current_time,
-                                   (long)seed_edge->id,
-                                   (int)array_len(group->edges),   /* gathered */
-                                   (int)net_params.group_size,     /* needed  */
-                                   (uint64_t)attempt_id);
-                logged_abort = 1;
-            }
-
-            /* group だけ片付ける（queueノードはここでは触らない） */
-            array_free(group->edges);
-            free(group);
-            array_free(chosen_nodes);
-
-            /*
-             * 重要：break しない。
-             * 先頭seedで失敗したら seed を先頭から外して末尾へ回し、次の seed を試す。
-             * （無限ループは rotations/max_rotations で防止）
-             */
-            void* seed_data = NULL;
-            group_add_queue = pop(group_add_queue, &seed_data);
-            if (seed_data != NULL) {
-                group_add_queue = enqueue_edge_fifo(group_add_queue, (struct edge*)seed_data);
-            }
-
-            rotations++;
             continue;
         }
+
+        /* ===== shortage / 失敗 ===== */
+        if (net_params.enable_group_event_csv && csv_group_events) {
+            ge_construct_abort((uint64_t)simulation->current_time,
+                               (long)seed_edge->id,
+                               (int)array_len(group->edges),
+                               (int)net_params.group_size,
+                               (uint64_t)attempt_id);
+        }
+
+        array_free(group->edges);
+        free(group);
+        array_free(chosen_nodes);
+
+        /*
+         * A/Bの核心：
+         * pop()+enqueue は禁止（in_group_add_queue と衝突して seed が消えるため）。
+         * ノードをfreeせず「先頭ノードを末尾へ回す」だけにする。
+         */
+        group_add_queue = rotate_queue_head_to_tail(group_add_queue);
+        rotations++;
     }
+
+    /* ===== C/D: 既存グループ補充フェーズ（新規構築の後にまとめて） ===== */
+    group_add_queue = fill_existing_groups(simulation, group_add_queue, network, net_params);
 
     return group_add_queue;
 }
