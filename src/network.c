@@ -50,6 +50,7 @@ struct edge* new_edge(long id, long channel_id, long counter_edge_id, long from_
   edge->balance = balance;
   edge->is_closed = 0;
   edge->tot_flows = 0;
+  edge->min_cap_use_count = 0;
   edge->group = NULL;
   struct channel_update* channel_update = malloc(sizeof(struct channel_update));
   channel_update->htlc_maximum_msat = channel_capacity;

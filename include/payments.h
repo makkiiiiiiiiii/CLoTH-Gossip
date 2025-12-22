@@ -32,6 +32,7 @@ struct payment {
   uint64_t end_time;
   int attempts;
   struct payment_error error;
+  struct array* min_cap_used_edges;
   /* attributes for multi-path-payment (mpp)*/
   unsigned int is_shard;
   long shards_id[2];

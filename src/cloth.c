@@ -111,39 +111,63 @@ void write_output(struct network* network, struct array* payments, char output_d
     printf("ERROR cannot open edge_output.csv\n");
     exit(-1);
   }
-  fprintf(csv_edge_output, "id,channel_id,counter_edge_id,from_node_id,to_node_id,balance,fee_base,fee_proportional,min_htlc,timelock,is_closed,tot_flows,channel_updates,group,locked_balance_and_duration\n");
-  for(i=0; i<array_len(network->edges); i++) {
+  fprintf(csv_edge_output,
+        "id,channel_id,counter_edge_id,from_node_id,to_node_id,balance,"
+        "fee_base,fee_proportional,min_htlc,timelock,is_closed,tot_flows,"
+        "min_cap_use_count,channel_updates,group,locked_balance_and_duration\n");
+
+for (i = 0; i < array_len(network->edges); i++) {
     edge = array_get(network->edges, i);
-    fprintf(csv_edge_output, "%ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld,%ld,%d,%d,%ld,", edge->id, edge->channel_id, edge->counter_edge_id, edge->from_node_id, edge->to_node_id, edge->balance, edge->policy.fee_base, edge->policy.fee_proportional, edge->policy.min_htlc, edge->policy.timelock, edge->is_closed, edge->tot_flows);
+
+    /* ここで min_cap_use_count を “必ず” 出す（これが抜けると列ズレします） */
+    fprintf(csv_edge_output,
+            "%ld,%ld,%ld,%ld,%ld,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu32 ",%u,%" PRIu64 ",%" PRIu64 ",",
+            edge->id,
+            edge->channel_id,
+            edge->counter_edge_id,
+            edge->from_node_id,
+            edge->to_node_id,
+            (uint64_t)edge->balance,
+            (uint64_t)edge->policy.fee_base,
+            (uint64_t)edge->policy.fee_proportional,
+            (uint64_t)edge->policy.min_htlc,
+            (uint32_t)edge->policy.timelock,
+            (unsigned int)edge->is_closed,
+            (uint64_t)edge->tot_flows,
+            (uint64_t)edge->min_cap_use_count);
+
+    /* channel_updates（htlc_maximum_msat の履歴） */
     char channel_updates_text[1000000] = "";
-    for (struct element *iterator = edge->channel_updates; iterator != NULL; iterator = iterator->next) {
-        struct channel_update *channel_update = iterator->data;
-        char temp[1000000];
-        int written = 0;
-        if(iterator->next != NULL) {
-            written = snprintf(temp, sizeof(temp), "-%ld%s", channel_update->htlc_maximum_msat, channel_updates_text);
-        }else{
-            written = snprintf(temp, sizeof(temp), "%ld%s", channel_update->htlc_maximum_msat, channel_updates_text);
+    for (struct element *it = edge->channel_updates; it != NULL; it = it->next) {
+        struct channel_update *cu = it->data;
+        char tmp[1000000];
+        if (it->next != NULL) {
+            snprintf(tmp, sizeof(tmp), "-%" PRIu64 "%s", (uint64_t)cu->htlc_maximum_msat, channel_updates_text);
+        } else {
+            snprintf(tmp, sizeof(tmp), "%" PRIu64 "%s", (uint64_t)cu->htlc_maximum_msat, channel_updates_text);
         }
-        // Check if the output was truncated
-        if (written < 0 || (size_t)written >= sizeof(temp)) {
-            fprintf(stderr, "Error: Buffer overflow detected.\n");
-            exit(1);
-        }
-        strncpy(channel_updates_text, temp, sizeof(channel_updates_text) - 1);
+        strncpy(channel_updates_text, tmp, sizeof(channel_updates_text) - 1);
+        channel_updates_text[sizeof(channel_updates_text) - 1] = '\0';
     }
     fprintf(csv_edge_output, "%s,", channel_updates_text);
-    if(edge->group == NULL){
+    /* group 列は必ず “NULL” または group_id を出す（空欄にしない） */
+    if (edge->group == NULL) {
         fprintf(csv_edge_output, "NULL,");
-    }else{
+    } else {
         fprintf(csv_edge_output, "%ld,", edge->group->id);
     }
-    for(struct element* iterator = edge->edge_locked_balance_and_durations; iterator != NULL; iterator = iterator->next){
-        struct edge_locked_balance_and_duration* edge_locked_balance_time = iterator->data;
-        uint64_t locked_time = edge_locked_balance_time->locked_end_time - edge_locked_balance_time->locked_start_time;
-        fprintf(csv_edge_output, "%lux%lu", edge_locked_balance_time->locked_balance, locked_time);
-        if(iterator->next != NULL){
-            fprintf(csv_edge_output, "-");
+
+    /* locked_balance_and_duration 列：無ければ NULL を出して列数を固定 */
+    if (edge->edge_locked_balance_and_durations == NULL) {
+        fprintf(csv_edge_output, "NULL");
+    } else {
+        int first = 1;
+        for (struct element* it = edge->edge_locked_balance_and_durations; it != NULL; it = it->next) {
+            struct edge_locked_balance_and_duration* t = it->data;
+            uint64_t locked_time = t->locked_end_time - t->locked_start_time;
+            if (!first) fprintf(csv_edge_output, "-");
+            fprintf(csv_edge_output, "%" PRIu64 "x%" PRIu64, (uint64_t)t->locked_balance, locked_time);
+            first = 0;
         }
     }
     fprintf(csv_edge_output, "\n");

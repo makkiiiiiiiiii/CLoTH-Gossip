@@ -34,6 +34,7 @@ struct payment* new_payment(long id, long sender, long receiver, uint64_t amount
   p->attempts = 0;
   p->error.type = NOERROR;
   p->error.hop = NULL;
+  p->min_cap_used_edges = NULL;
   p->is_shard = 0;
   p->shards_id[0] = p->shards_id[1] = -1;
   p->history = NULL;

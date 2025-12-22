@@ -56,6 +56,7 @@ struct edge {
   uint64_t balance;
   unsigned int is_closed;
   uint64_t tot_flows;
+  uint64_t min_cap_use_count;
   struct group* group;
   struct element* channel_updates;
   struct element* edge_locked_balance_and_durations;
