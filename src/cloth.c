@@ -498,6 +498,7 @@ int main(int argc, char *argv[]) {
   simulation = malloc(sizeof(struct simulation));
 
   simulation->random_generator = initialize_random_generator();
+  group_events_open("result");
   printf("NETWORK INITIALIZATION\n");
   network = initialize_network(net_params, simulation->random_generator); //ネットワークの初期化
   n_nodes = array_len(network->nodes);
@@ -612,6 +613,7 @@ int main(int argc, char *argv[]) {
   free(simulation);
 
 //    free_network(network);
+  group_events_close();
 
   return 0;
 }
