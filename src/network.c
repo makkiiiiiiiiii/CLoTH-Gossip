@@ -4,6 +4,7 @@
 #include "../include/network.h"
 #include "../include/array.h"
 #include "../include/utils.h"
+#include "../include/event.h"
 
 
 /* Functions in this file generate a payment-channel network where to simulate the execution of payments */
@@ -406,7 +407,12 @@ int update_group(struct group* group, struct network_params net_params, uint64_t
         group->group_cap = group->min_cap_limit;
     }
 
-    // record group_update history
+    /*ここで公開最小容量の更新ログを出す(min/maxを算出済みの直後がわかりやすい)*/
+    if (net_params.enable_group_event_csv &&  csv_group_events) {
+        ge_update_group((uint64_t)current_time,group->id,group->group_cap,min,max);
+    }
+
+    //record group_update history
     struct group_update* group_update = malloc(sizeof(struct group_update));
     group_update->group_cap = group->group_cap;
     group_update->time = current_time;
