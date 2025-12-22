@@ -84,17 +84,33 @@ struct route_hop *get_route_hop(long node_id, struct array *route_hops, int is_s
 }
 
 /* === helper: count usage when this edge is the group's min-cap === */
-/* 呼び出しタイミング: balance を減らす直前 */
-static inline void maybe_count_min_cap_use(struct edge* e) {
-    if (e == NULL) return;
+static inline void record_min_cap_use(struct payment* p, struct edge* e) {
+    if (!p || !e) return;
     if (e->group == NULL) return;
 
     struct group* g = e->group;
+    if (g == NULL) return;
 
-    /* 公開されている最小容量として使われたかどうかを判定 */
+    /* forward時点で “公開min (= group_cap)” と一致していた */
     if (e->balance == g->group_cap) {
-        e->min_cap_use_count += 1;
+        if (p->min_cap_used_edges == NULL) {
+            p->min_cap_used_edges = array_initialize(4);
+        }
+        p->min_cap_used_edges = array_insert(p->min_cap_used_edges, e);
     }
+}
+
+static inline void commit_min_cap_use_on_success(struct payment* p) {
+    if (!p || p->min_cap_used_edges == NULL) return;
+
+    for (long i = 0; i < array_len(p->min_cap_used_edges); i++) {
+        struct edge* e = (struct edge*)array_get(p->min_cap_used_edges, i);
+        if (e) {
+            e->min_cap_use_count += 1;
+        }
+    }
+    array_free(p->min_cap_used_edges);
+    p->min_cap_used_edges = NULL;
 }
 
 static int seen_group(struct array* seen, struct group* g)
@@ -104,6 +120,16 @@ static int seen_group(struct array* seen, struct group* g)
         if ((struct group*)array_get(seen, i) == g) return 1;
     }
     return 0;
+}
+
+/* discard temporary record on final failure */
+static inline void discard_min_cap_used_edges(struct payment* p)
+{
+    if (!p) return;
+    if (p->min_cap_used_edges != NULL) {
+        array_free(p->min_cap_used_edges);
+        p->min_cap_used_edges = NULL;
+    }
 }
 
 /* FUNCTIONS MANAGING NODE PAIR RESULTS */
@@ -207,6 +233,10 @@ void generate_send_payment_event(struct payment* payment, struct array* path, st
   struct event* send_payment_event;
   route = transform_path_into_route(path, payment->amount, network, simulation->current_time);
   payment->route = route;
+  if (payment->min_cap_used_edges != NULL) {
+      array_free(payment->min_cap_used_edges);
+      payment->min_cap_used_edges = NULL;
+  }
   // execute send_payment event immediately
   next_event_time = simulation->current_time;
   send_payment_event = new_event(next_event_time, SENDPAYMENT, payment->sender, payment );
@@ -239,6 +269,8 @@ void find_path(struct event *event, struct simulation* simulation, struct networ
   if(net_params.payment_timeout != -1 && simulation->current_time > payment->start_time + net_params.payment_timeout) {
     payment->end_time = simulation->current_time;
     payment->is_timeout = 1;
+
+    discard_min_cap_used_edges(payment);
     return;
   }
 
@@ -308,11 +340,13 @@ void find_path(struct event *event, struct simulation* simulation, struct networ
     shard1_path = dijkstra(payment->sender, payment->receiver, shard1_amount, network, simulation->current_time, 0, &error, net_params.routing_method, NULL, payment->max_fee_limit / 2);
     if(shard1_path == NULL){
       payment->end_time = simulation->current_time;
+      discard_min_cap_used_edges(payment);
       return;
     }
     shard2_path = dijkstra(payment->sender, payment->receiver, shard2_amount, network, simulation->current_time, 0, &error, net_params.routing_method, NULL, payment->max_fee_limit / 2);
     if(shard2_path == NULL){
       payment->end_time = simulation->current_time;
+      discard_min_cap_used_edges(payment);
       return;
     }
     // if shard1_path and shard2_path is same route, return
@@ -331,6 +365,7 @@ void find_path(struct event *event, struct simulation* simulation, struct networ
             // all hop of shade1_path is same as shade2_path's, return
             if (duplicated == shard1_path_len && duplicated == shard2_path_len) {
                 payment->end_time = simulation->current_time;
+                discard_min_cap_used_edges(payment);
                 return;
             }
         }
@@ -351,6 +386,7 @@ void find_path(struct event *event, struct simulation* simulation, struct networ
 
   // no path
   payment->end_time = simulation->current_time;
+  discard_min_cap_used_edges(payment);
 }
 
 /* send an HTLC for the payment (behavior of the payment sender) */
@@ -401,8 +437,7 @@ void send_payment(struct event* event, struct simulation* simulation, struct net
         return;
     }
 
-    /* このエッジが min-cap として使われたなら 1 カウント */
-    maybe_count_min_cap_use(next_edge);
+    record_min_cap_use(payment, next_edge);
 
     // update balance
     uint64_t prev_balance = next_edge->balance;
@@ -475,8 +510,9 @@ void forward_payment(struct event* event, struct simulation* simulation, struct 
     simulation->events = heap_insert(simulation->events, next_event, compare_event);
     return;
   }
-  /* このエッジが min-cap として使われたなら 1 カウント */
-  maybe_count_min_cap_use(next_edge);
+
+  record_min_cap_use(payment, next_edge);
+
   // update balance
   uint64_t prev_balance = next_edge->balance;
   (void)prev_balance;
@@ -571,6 +607,7 @@ void receive_success(struct event* event, struct simulation* simulation, struct 
   payment = event->payment;
   node = array_get(network->nodes, event->node_id);
   event->payment->end_time = simulation->current_time;
+  commit_min_cap_use_on_success(payment);
 
   add_attempt_history(payment, network, simulation->current_time, 1);
 

@@ -83,56 +83,93 @@ void write_output(struct network* network, struct array* payments, char output_d
     printf("ERROR cannot open groups_output.csv\n"); //グループの情報（構成エッジ、容量、閉鎖状態など）
     exit(-1);
   }
-  fprintf(csv_group_output, "id,edges,balances,is_closed(closed_time),constructed_time,min_cap_limit,max_cap_limit,max_edge_balance,min_edge_balance,group_capacity,cul\n");
+    fprintf(csv_group_output, "id,edges,balances,is_closed(closed_time),constructed_time,min_cap_limit,max_cap_limit,max_edge_balance,min_edge_balance,group_capacity,cul\n");
   for(i=0; i<array_len(network->groups); i++) {
     struct group *group = array_get(network->groups, i);
-    fprintf(csv_group_output, "%ld,", group->id);
+    if (!group) continue;
+
     long n_members = array_len(group->edges);
-    for(j=0; j< n_members; j++){
-        struct edge* edge_snapshot = array_get(group->edges, j);
-        fprintf(csv_group_output, "%ld", edge_snapshot->id);
-        if(j < n_members -1){
-            fprintf(csv_group_output, "-");
-        }else{
-            fprintf(csv_group_output, ",");
-        }
-    }
-    for(j=0; j< n_members; j++){
-        struct edge* edge_snapshot = array_get(group->edges, j);
-        fprintf(csv_group_output, "%lu", edge_snapshot->balance);
-        if(j < n_members -1){
-            fprintf(csv_group_output, "-");
-        }else{
-            fprintf(csv_group_output, ",");
-        }
-    }
+
+    /* === 最新スナップショットに統一：常に history->data を使う === */
     struct group_update* group_update = NULL;
-    int group_closed = (group->is_closed != GROUP_NOT_CLOSED);
-
     if (group->history) {
-      if (group_closed && group->history->next) group_update = group->history->next->data;
-      else group_update = group->history->data;
+      group_update = (struct group_update*)group->history->data; /* 最新 */
     }
 
-    float sum_cul = 0.0f;
-    if (group_update && n_members > 0) {
-      for (j = 0; j < n_members; j++) {
-        uint64_t eb = group_update->edge_balances[j];
-        if (eb == 0) continue;
-        sum_cul += (1.0f - ((float)group_update->group_cap / (float)eb));
+    /* id */
+    fprintf(csv_group_output, "%ld,", group->id);
+
+    /* edges（現メンバーID列挙：順序は group->edges の並び） */
+    for(j=0; j< n_members; j++){
+      struct edge* edge_snapshot = array_get(group->edges, j);
+      fprintf(csv_group_output, "%ld", edge_snapshot ? edge_snapshot->id : -1);
+      if(j < n_members -1) fprintf(csv_group_output, "-");
+      else                fprintf(csv_group_output, ",");
+    }
+
+    /* balances（最新スナップショットの edge_balances を出力） */
+    for(j=0; j< n_members; j++){
+      uint64_t b = 0;
+      if (group_update) {
+        /* update_group が group->edges の順で edge_balances を作っている前提 */
+        b = group_update->edge_balances[j];
+      } else {
+        /* 保険：history が無い異常系は現在値で埋める */
+        struct edge* edge_snapshot = array_get(group->edges, j);
+        b = edge_snapshot ? edge_snapshot->balance : 0;
       }
+
+      fprintf(csv_group_output, "%" PRIu64, (uint64_t)b);
+      if(j < n_members -1) fprintf(csv_group_output, "-");
+      else                fprintf(csv_group_output, ",");
     }
 
+    /* is_closed(closed_time) */
+    int group_closed = (group->is_closed != GROUP_NOT_CLOSED);
     long long closed_time_out = group_closed ? (long long)group->is_closed : -1LL;
 
-    fprintf(csv_group_output, "%lld,%lu,%lu,%lu,%lu,%lu,%lu,%f\n",
+    /* max/min/group_cap/cul を同一スナップショットから算出 */
+    uint64_t min_b = UINT64_MAX;
+    uint64_t max_b = 0;
+    float sum_cul = 0.0f;
+
+    uint64_t cap = 0;
+    if (group_update) cap = group_update->group_cap;
+    else             cap = group->group_cap; /* 保険 */
+
+    if (n_members > 0) {
+      for (j = 0; j < n_members; j++) {
+        uint64_t eb = 0;
+        if (group_update) {
+          eb = group_update->edge_balances[j];
+        } else {
+          struct edge* edge_snapshot = array_get(group->edges, j);
+          eb = edge_snapshot ? edge_snapshot->balance : 0;
+        }
+
+        if (eb < min_b) min_b = eb;
+        if (eb > max_b) max_b = eb;
+
+        if (eb > 0) {
+          sum_cul += (1.0f - ((float)cap / (float)eb));
+        }
+      }
+    }
+    if (min_b == UINT64_MAX) { /* n_members==0 などの保険 */
+      min_b = 0;
+      max_b = 0;
+    }
+
+    /* 出力：max/min/group_capacity/cul も同一スナップショットの値 */
+    fprintf(csv_group_output,
+            "%lld,%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%" PRIu64 ",%f\n",
             closed_time_out,
-            group->constructed_time,
-            group->min_cap_limit,
-            group->max_cap_limit,
-            group->max_cap,
-            group->min_cap,
-            group->group_cap,
+            (uint64_t)group->constructed_time,
+            (uint64_t)group->min_cap_limit,
+            (uint64_t)group->max_cap_limit,
+            (uint64_t)max_b,
+            (uint64_t)min_b,
+            (uint64_t)cap,
             (n_members > 0 ? (sum_cul / (float)n_members) : 0.0f));
   }
   fclose(csv_group_output);

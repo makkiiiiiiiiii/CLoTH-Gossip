@@ -41,6 +41,7 @@ struct payment {
   int no_balance_count;
   unsigned int is_timeout;
   struct element* history; // list of `struct attempt`
+  struct array* min_cap_used_edges;
 };
 
 struct attempt {
